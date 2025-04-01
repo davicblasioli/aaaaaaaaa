@@ -1,15 +1,15 @@
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, flash
 from main import app, con
 from flask_bcrypt import Bcrypt, check_password_hash, generate_password_hash
 from fpdf import FPDF
 import jwt
+import smtplib
 import re
+from email.mime.text import MIMEText
 import os
 import bcrypt
 
 bcrypt = Bcrypt(app)  # Inicializa o bcrypt para criptografia segura
-
-
 app.config.from_pyfile('config.py')
 senha_secreta = app.config['SECRET_KEY']
 
@@ -30,7 +30,6 @@ def remover_bearer(token):
     # Verifica se o token começa com 'Bearer '
     if token.startswith('Bearer '):
         # Se o token começar com 'Bearer ', remove o prefixo 'Bearer ' do token
-        # Utiliza a função len ('Bearer') para obter o comprimento do prefixo 'Bearer ' e corta o token a partir desse ponto.
         return token[len('Bearer '):]
     else:
         # Se o token não começar com 'Bearer ', retorna o token original sem alterações
@@ -40,6 +39,56 @@ def remover_bearer(token):
 def validar_senha(senha):
     padrao = r'^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$'
     return bool(re.fullmatch(padrao, senha))
+
+
+def email_emprestimo(con, token):
+
+    id_usuario = token.get('id_usuario')
+    email = id_usuario.get('email')
+
+
+    if not email or not id_usuario:
+        raise ValueError("Informações de sessão inválidas. Certifique-se de que 'email' e 'id_usuario' estão definidos.")
+
+    cursor = con.cursor()
+    cursor.execute(
+        'SELECT FIRST 1 VALOR, DATADIA, FONTE FROM RECEITAS WHERE ID_USUARIO = :ID_USUARIO ORDER BY ID_RECEITA DESC',
+        (id_usuario,)
+    )
+    receita = cursor.fetchone()
+
+    if not receita:
+        raise ValueError("Nenhuma receita encontrada para o usuário especificado.")
+
+    data_emprestimo = emprestimos[0]
+    data_devolucao = emprestimos[1]
+    livro = emprestimos[2]
+
+    subject = "Emprestimo realizado"
+    body = (
+        f"Um emprestimo do livro: {livro} foi realizado em sua conta no dia {data_emprestimo}, e deve ser devolvido até {data_devolucao}"
+        f"caso contrário será cobrada uma multa de sua conta"
+    )
+
+    sender = "heitor.mitsuuti@gmail.com"
+    recipients = [email]  # Lista de destinatários
+    password = "dyhvmufjdyngqsno"  # Substitua pela sua senha de aplicativo
+
+    # Enviar o e-mail
+    try:
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender
+        msg['To'] = ', '.join(recipients)
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp_server:
+            smtp_server.login(sender, password)
+            smtp_server.sendmail(sender, recipients, msg.as_string())
+            print("Mensagem enviada com sucesso!")
+
+    except Exception as e:
+        raise RuntimeError(f"Erro ao enviar o e-mail: {e}")
+
 
 @app.route('/usuario', methods=['GET'])
 def usuario():
@@ -71,11 +120,10 @@ def usuario_post():
         return jsonify({"error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."}), 404
 
     cursor = con.cursor()
-
     cursor.execute('SELECT 1 FROM USUARIOS WHERE email = ?', (email,))
 
     if cursor.fetchone():
-        return jsonify({"error":'Email do usuário já cadastrado'}), 400
+        return jsonify({"error": 'Email do usuário já cadastrado'}), 400
 
     senha = bcrypt.generate_password_hash(senha).decode('utf-8')
 
@@ -84,8 +132,6 @@ def usuario_post():
 
     id_usuario = cursor.fetchone()[0]
     con.commit()
-    cursor.close()
-
     cursor.close()
 
     return jsonify({
@@ -98,6 +144,7 @@ def usuario_post():
             'data_nascimento': data_nascimento,
         }
     })
+
 
 @app.route('/usuariosadm', methods=['POST'])
 def usuarioadm_post():
@@ -126,11 +173,10 @@ def usuarioadm_post():
         return jsonify({"error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."}), 404
 
     cursor = con.cursor()
-
     cursor.execute('SELECT 1 FROM USUARIOS WHERE email = ?', (email,))
 
     if cursor.fetchone():
-        return jsonify({"error":'Email do usuário já cadastrado'}), 400
+        return jsonify({"error": 'Email do usuário já cadastrado'}), 400
 
     senha = bcrypt.generate_password_hash(senha).decode('utf-8')
 
@@ -141,8 +187,6 @@ def usuarioadm_post():
     con.commit()
     cursor.close()
 
-    cursor.close()
-
     return jsonify({
         'message': 'Usuario cadastrado com sucesso!',
         'usuario': {
@@ -151,11 +195,12 @@ def usuarioadm_post():
             'senha': senha,
             'telefone': telefone,
             'data_nascimento': data_nascimento,
-            'cargo':cargo,
+            'cargo': cargo,
         }
     })
 
-#ROTA PARA EDITAR PERFIL USANDO CARGO DE USUÁRIO NORMAL, BIBLIOTECÁRIO E ADMIN
+
+# ROTA PARA EDITAR PERFIL USANDO CARGO DE USUÁRIO NORMAL, BIBLIOTECÁRIO E ADMIN
 @app.route('/usuariosadm/<int:id>', methods=['PUT'])
 def usuarioadm_put(id):
     token = request.headers.get('Authorization')
@@ -195,7 +240,6 @@ def usuarioadm_put(id):
         cursor.close()
         return jsonify({'error': 'O email já está em uso por outro usuário'}), 400
 
-
     # Atualiza apenas os campos que podem ser editados
     cursor.execute('UPDATE USUARIOS SET NOME = ?, EMAIL = ?, TELEFONE = ?, DATA_NASCIMENTO = ?, CARGO = ?, STATUS = ? WHERE ID_USUARIO = ?',
                    (nome, email, telefone, data_nascimento, cargo, status, id))
@@ -215,6 +259,7 @@ def usuarioadm_put(id):
             'status': status,
         }
     })
+
 
 @app.route('/usuarios/<int:id>', methods=['PUT'])
 def usuario_put(id):
@@ -265,17 +310,16 @@ def usuario_put(id):
         }
     })
 
+
 @app.route('/usuarios/<int:id>', methods=['DELETE'])
 def deletar_usuarios(id):
     cursor = con.cursor()
 
-    # Verificar se o livro existe
     cursor.execute("SELECT 1 FROM USUARIOS WHERE ID_USUARIO = ?", (id,))
     if not cursor.fetchone():
         cursor.close()
         return jsonify({"error": "Usuario não encontrado"}), 404
 
-    # Excluir o livro
     cursor.execute("DELETE FROM USUARIOS WHERE ID_USUARIO = ?", (id,))
     con.commit()
     cursor.close()
@@ -285,8 +329,8 @@ def deletar_usuarios(id):
         'id_usuario': id
     })
 
-#ROTA PARA EDITAR PERFIL USANDO CARGO DE USUÁRIO NORMAL, BIBLIOTECÁRIO E ADMIN
 
+# ROTA PARA EDITAR PERFIL USANDO CARGO DE USUÁRIO NORMAL, BIBLIOTECÁRIO E ADMIN
 @app.route('/editar_senha/<int:id>', methods=['PUT'])
 def editar_senha(id):
     cursor = con.cursor()
@@ -348,7 +392,6 @@ def login():
     senha = data.get('senha')
 
     cursor = con.cursor()
-
     cursor.execute("SELECT SENHA, ID_USUARIO, NOME, CARGO, EMAIL, MULTA, DATA_NASCIMENTO, TELEFONE, STATUS, TENTATIVAS_ERRO FROM usuarios WHERE EMAIL = ?", (email,))
     usuario = cursor.fetchone()
 
@@ -404,11 +447,34 @@ def login():
     return jsonify({"error": "Email ou senha inválidos"}), 401
 
 
-#ROTAS DOS LIVROS
+# ROTAS DOS LIVROS
+@app.route('/livro/<int:id>', methods=['GET'])
+def livro_buscar(id):
+    cur = con.cursor()
+    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM livros WHERE ID_LIVRO =?', (id,))
+    livros = cur.fetchall()
+
+    if not livros:
+        return jsonify({"error": "Nenhum livro encontrado."}), 400
+
+    livros_dic = []
+    for livros in livros:
+        livros_dic.append({
+            'id_livro': livros[0],
+            'titulo': livros[1],
+            'autor': livros[2],
+            'data_publicacao': livros[3],
+            'ISBN': livros[4],
+            'descricao': livros[5],
+            'quantidade': livros[6],
+            'categoria': livros[7]
+        })
+    return jsonify(mensagem='Lista de Livros', livros=livros_dic)
+
 @app.route('/livro', methods=['GET'])
 def livro():
     cur = con.cursor()
-    cur.execute('SELECT id_livro, titulo, autor, data_publicacao FROM livros')
+    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM livros')
     livros = cur.fetchall()
     livros_dic = []
     for livros in livros:
@@ -424,206 +490,8 @@ def livro():
         })
     return jsonify(mensagem='Lista de Livros', livros=livros_dic)
 
-
 # Rota para criar um novo livro
 @app.route('/livros', methods=['POST'])
-def criar_livro():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
-
-    token = remover_bearer(token)
-    try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-    except jwt.ExpiredSignatureError:
-        return jsonify({'mensagem': 'Token expirado'}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({'mensagem': 'Token inválido'}), 401
-
-    data = request.get_json()
-
-    titulo = data.get('titulo')
-    autor = data.get('autor')
-    data_publicacao = data.get('data_publicacao')
-    ISBN = data.get('ISBN')
-    descricao = data.get('descricao')
-    quantidade = data.get('quantidade')
-    categoria = data.get('categoria')
-
-    cursor = con.cursor()
-
-    # Verificar se o livro já existe
-    cursor.execute("SELECT 1 FROM livros WHERE TITULO = ?", (titulo,))
-    if cursor.fetchone():
-        return jsonify({"error": "Livro já cadastrado"}), 400
-
-    # Inserir o novo livro
-    cursor.execute("INSERT INTO livros (TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria))
-    con.commit()
-    cursor.close()
-
-    return jsonify({
-        'message': "Livro cadastrado com sucesso!",
-        'livro': {
-            'titulo': titulo,
-            'autor': autor,
-            'data_publicacao': data_publicacao,
-            'ISBN': ISBN,
-            'descricao': descricao,
-            'quantidade': quantidade,
-            'categoria': categoria
-        }
-    }), 201
-
-
-@app.route('/livros/<int:id>', methods=['PUT'])
-def livro_put(id):
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
-
-    token = remover_bearer(token)
-    try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-    except jwt.ExpiredSignatureError:
-        return jsonify({'mensagem': 'Token expirado'}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({'mensagem': 'Token inválido'}), 401
-
-    cursor = con.cursor()
-    cursor.execute('SELECT ID_LIVRO, TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM LIVROS WHERE ID_LIVRO = ?', (id,))
-    livro_data = cursor.fetchone()
-
-    if not livro_data:
-        cursor.close()
-        return jsonify({'error': 'O livro informado não existe'}), 404
-
-    titulo = request.form.get('titulo')
-    autor = request.form.get('autor')
-    data_publicacao = request.form.get('data_publicacao')
-    ISBN = request.form.get('ISBN')
-    descricao = request.form.get('descricao')
-    quantidade = request.form.get('quantidade')
-    categoria = request.form.get('categoria')
-    imagem = request.files.get('imagem')
-
-    cursor.execute('UPDATE LIVROS SET TITULO = ?, AUTOR = ?, DATA_PUBLICACAO = ?, ISBN = ?, DESCRICAO = ?, QUANTIDADE = ?, CATEGORIA = ? WHERE ID_LIVRO = ?',
-                   (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, id))
-
-    con.commit()
-    cursor.close()
-
-    if imagem:
-        nome_imagem = f"{livro_data[0]}.jpeg"
-        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Usuarios")
-        os.makedirs(pasta_destino, exist_ok=True)
-        imagem_path = os.path.join(pasta_destino, nome_imagem)
-        imagem.save(imagem_path)
-
-    return jsonify({
-        'message': 'Livro editado com sucesso!',
-        'livro': {
-            'titulo': titulo,
-            'autor': autor,
-            'data_publicacao': data_publicacao,
-            'ISBN': ISBN,
-            'descricao': descricao,
-            'quantidade': quantidade,
-            'categoria': categoria
-        }
-    })
-
-@app.route('/livros/<int:id>', methods=['DELETE'])
-def deletar_livro(id):
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
-
-    token = remover_bearer(token)
-    try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-    except jwt.ExpiredSignatureError:
-        return jsonify({'mensagem': 'Token expirado'}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({'mensagem': 'Token inválido'}), 401
-
-    cursor = con.cursor()
-
-    # Verificar se o livro existe
-    cursor.execute("SELECT 1 FROM livros WHERE ID_LIVRO = ?", (id,))
-    if not cursor.fetchone():
-        cursor.close()
-        return jsonify({"error": "Livro não encontrado"}), 404
-
-    # Excluir o livro
-    cursor.execute("DELETE FROM livros WHERE ID_LIVRO = ?", (id,))
-    con.commit()
-    cursor.close()
-
-    return jsonify({
-        'message': "Livro excluido com sucesso!",
-        'id_livro': id
-    })
-
-
-#ROTAS DE ADM
-
-@app.route('/livros_relatorio', methods=['GET'])
-def relatorio():
-    cursor = con.cursor()
-    cursor.execute("SELECT * FROM livros")
-    livros = cursor.fetchall()
-    cursor.close()
-
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-
-    # Título do relatório
-    pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, "Relatório de Livros", ln=True, align='C')
-    pdf.ln(5)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
-    pdf.ln(5)
-
-    # Define a fonte para o conteúdo
-    pdf.set_font("Arial", size=12)
-
-    # Loop para adicionar cada livro em formato de lista
-    for livro in livros:
-        pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
-
-        pdf.set_font("Arial", size=10)
-        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
-        pdf.multi_cell(0, 7, f"Título: {livro[1]}")
-        pdf.multi_cell(0, 7, f"Autor: {livro[2]}")
-        pdf.multi_cell(0, 7, f"Publicação: {livro[3]}")
-        pdf.multi_cell(0, 7, f"ISBN: {livro[4]}")
-        pdf.multi_cell(0, 7, f"Descrição: {livro[5]}")
-        pdf.multi_cell(0, 7, f"Quantidade: {livro[6]}")
-        pdf.multi_cell(0, 7, f"Categoria: {livro[7]}")
-        pdf.multi_cell(0, 7, f"Status: {livro[8]}")
-
-        pdf.ln(5)  # Adiciona espaço entre os livros
-
-    # Contador de livros
-    pdf.ln(10)
-    pdf.set_font("Arial", style='B', size=12)
-    pdf.cell(200, 10, f"Total de livros cadastrados: {len(livros)}", ln=True, align='C')
-
-    # Salva o arquivo PDF
-    pdf_path = "relatorio_livros.pdf"
-    pdf.output(pdf_path)
-
-    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
-
-
-@app.route('/livro_imagem', methods=['POST'])
 def livro_imagem():
     token = request.headers.get('Authorization')
     if not token:
@@ -668,7 +536,7 @@ def livro_imagem():
     imagem_path = None
     if imagem:
         nome_imagem = f"{livro_id}.jpeg"  # Define o nome fixo com .jpeg
-        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")
+        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")  # Atualizado para refletir a nova estrutura
         os.makedirs(pasta_destino, exist_ok=True)
         imagem_path = os.path.join(pasta_destino, nome_imagem)
         imagem.save(imagem_path)
@@ -686,48 +554,152 @@ def livro_imagem():
             'descricao': descricao,
             'quantidade': quantidade,
             'categoria': categoria,
-            'imagem_path': imagem_path
+            'imagem_path': f"/static/uploads/Livros/{livro_id}.jpeg"
         }
     }), 201
 
+@app.route('/livros/<int:id>', methods=['PUT'])
+def livro_put(id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
 
-@app.route('/editar_livro_imagem', methods=['PUT'])
-def editar_livro_imagem():
-    id_livro = request.form.get('id_livro')  # Recebe o ID do usuário
-    nova_imagem = request.files.get('imagem')  # Recebe a nova imagem
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
 
-    if not id_livro or not nova_imagem:
-        return jsonify({"error": "ID do livro e imagem são obrigatórios"}), 400
+    cursor = con.cursor()
+    cursor.execute('SELECT ID_LIVRO, TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM LIVROS WHERE ID_LIVRO = ?', (id,))
+    livro_data = cursor.fetchone()
+
+    if not livro_data:
+        cursor.close()
+        return jsonify({'error': 'O livro informado não existe'}), 404
+
+    titulo = request.form.get('titulo')
+    autor = request.form.get('autor')
+    data_publicacao = request.form.get('data_publicacao')
+    ISBN = request.form.get('ISBN')
+    descricao = request.form.get('descricao')
+    quantidade = request.form.get('quantidade')
+    categoria = request.form.get('categoria')
+    imagem = request.files.get('imagem')
+
+    cursor.execute('UPDATE LIVROS SET TITULO = ?, AUTOR = ?, DATA_PUBLICACAO = ?, ISBN = ?, DESCRICAO = ?, QUANTIDADE = ?, CATEGORIA = ? WHERE ID_LIVRO = ?',
+                   (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, id))
+
+    con.commit()
+    cursor.close()
+
+    if imagem:
+        nome_imagem = f"{livro_data[0]}.jpeg"
+        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")  # Atualizado para refletir a nova estrutura
+        os.makedirs(pasta_destino, exist_ok=True)
+        imagem_path = os.path.join(pasta_destino, nome_imagem)
+        imagem.save(imagem_path)
+
+    return jsonify({
+        'message': 'Livro editado com sucesso!',
+        'livro': {
+            'titulo': titulo,
+            'autor': autor,
+            'data_publicacao': data_publicacao,
+            'ISBN': ISBN,
+            'descricao': descricao,
+            'quantidade': quantidade,
+            'categoria': categoria
+        }
+    })
+
+
+@app.route('/livros/<int:id>', methods=['DELETE'])
+def deletar_livro(id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
 
     cursor = con.cursor()
 
-    # Verifica se o usuário existe
-    cursor.execute("SELECT 1 FROM LIVROS WHERE ID_LIVRO = ?", (id_livro,))
+    # Verificar se o livro existe
+    cursor.execute("SELECT 1 FROM livros WHERE ID_LIVRO = ?", (id,))
     if not cursor.fetchone():
         cursor.close()
         return jsonify({"error": "Livro não encontrado"}), 404
 
-    # Caminho da pasta de destino
-    pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")
-    os.makedirs(pasta_destino, exist_ok=True)
-
-    # Caminho da imagem antiga
-    imagem_path = os.path.join(pasta_destino, f"{id_livro}.jpeg")
-
-    # Remove a imagem antiga, se existir
-    if os.path.exists(imagem_path):
-        os.remove(imagem_path)
-
-    # Salva a nova imagem
-    nova_imagem.save(imagem_path)
-
+    # Excluir o livro
+    cursor.execute("DELETE FROM livros WHERE ID_LIVRO = ?", (id,))
+    con.commit()
     cursor.close()
 
     return jsonify({
-        'message': "Imagem editada com sucesso!",
-        'imagem_path': imagem_path
-    }), 200
+        'message': "Livro excluido com sucesso!",
+        'id_livro': id
+    })
 
+
+# ROTAS DE ADM
+@app.route('/livros_relatorio', methods=['GET'])
+def relatorio():
+    cursor = con.cursor()
+    cursor.execute("SELECT * FROM livros")
+    livros = cursor.fetchall()
+    cursor.close()
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Título do relatório
+    pdf.set_font("Arial", style='B', size=16)
+    pdf.cell(200, 10, "Relatório de Livros", ln=True, align='C')
+    pdf.ln(5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
+    pdf.ln(5)
+
+    # Define a fonte para o conteúdo
+    pdf.set_font("Arial", size=12)
+
+    # Loop para adicionar cada livro em formato de lista
+    for livro in livros:
+        pdf.set_font("Arial", style='B', size=12)
+        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
+
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
+        pdf.multi_cell(0, 7, f"Título: {livro[1]}")
+        pdf.multi_cell(0, 7, f"Autor: {livro[2]}")
+        pdf.multi_cell(0, 7, f"Publicação: {livro[3]}")
+        pdf.multi_cell(0, 7, f"ISBN: {livro[4]}")
+        pdf.multi_cell(0, 7, f"Descrição: {livro[5]}")
+        pdf.multi_cell(0, 7, f"Quantidade: {livro[6]}")
+        pdf.multi_cell(0, 7, f"Categoria: {livro[7]}")
+
+        pdf.ln(5)  # Adiciona espaço entre os livros
+
+    # Contador de livros
+    pdf.ln(10)
+    pdf.set_font("Arial", style='B', size=12)
+    pdf.cell(200, 10, f"Total de livros cadastrados: {len(livros)}", ln=True, align='C')
+
+    # Salva o arquivo PDF
+    pdf_path = "relatorio_livros.pdf"
+    pdf.output(pdf_path)
+
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
 
 @app.route('/bibliotecario', methods=['POST'])
@@ -744,7 +716,6 @@ def bibliotecario_post():
         return jsonify({"error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."}), 404
 
     cursor = con.cursor()
-
     cursor.execute('SELECT 1 FROM USUARIOS WHERE NOME = ?', (nome,))
 
     if cursor.fetchone():
@@ -767,5 +738,76 @@ def bibliotecario_post():
             'telefone': telefone,
             'data_nascimento': data_nascimento,
             'cargo': cargo
+        }
+    })
+
+@app.route('/emprestimos/<int:id_livro>', methods=['POST'])
+def emprestimos(id_livro):
+    data = request.get_json()
+
+    if not data or 'data_emprestimo' not in data or 'data_devolucao' not in data:
+        return jsonify({'mensagem': 'Campos obrigatórios não informados'}), 400
+
+    data_emprestimo = data['data_emprestimo']
+    data_devolucao = data['data_devolucao']
+
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    cursor = con.cursor()
+
+    # Verifica se o livro existe e se está disponível
+    cursor.execute("SELECT QUANTIDADE FROM livros WHERE ID_LIVRO = ?", (id_livro,))
+    livro_data = cursor.fetchone()
+
+    if not livro_data:
+        cursor.close()
+        return jsonify({"mensagem": "Livro não encontrado"}), 404
+
+    quantidade_disponivel = livro_data[0]
+
+    if quantidade_disponivel <= 0:
+        cursor.close()
+        return jsonify({"mensagem": "Livro não disponível para empréstimo"}), 400
+
+    try:
+        # Insere o empréstimo
+        cursor.execute(
+            'INSERT INTO emprestimos(data_emprestimo, data_devolucao, id_livro, id_usuario) VALUES (?,?,?,?)',
+            (data_emprestimo, data_devolucao, id_livro, id_usuario)
+        )
+
+        # Decrementa a quantidade de livros disponíveis
+        cursor.execute("UPDATE livros SET QUANTIDADE = QUANTIDADE - 1 WHERE ID_LIVRO = ?", (id_livro,))
+        con.commit()
+
+        try:
+            email_emprestimo(con, token)
+        except Exception as email_error:
+            flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
+
+    except Exception as e:
+        return jsonify({"mensagem": f"Erro ao registrar empréstimo: {str(e)}"}), 500
+    finally:
+        cursor.close()
+
+
+    return jsonify({
+        'message': 'Emprestimo realizado com sucesso!',
+        'emprestimo': {
+            'id_livro': id_livro,
+            'id_usuario': id_usuario,
+            'data_empréstimo': data_emprestimo,
+            'data_devolução': data_devolucao
         }
     })
