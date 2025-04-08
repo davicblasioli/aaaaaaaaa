@@ -932,8 +932,8 @@ def emprestimos(id_emprestimo):
 
 
 
-@app.route('/emprestimos', methods=['GET'])
-def emprestimos_get():
+@app.route('/reservas', methods=['GET'])
+def reservas_get():
     cur = con.cursor()
     cur.execute('''
         SELECT 
