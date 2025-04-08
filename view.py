@@ -8,9 +8,7 @@ import re
 from email.mime.text import MIMEText
 import os
 import bcrypt
-from datetime import datetime
-
-data_emprestimo = datetime.now().strftime('%Y-%m-%d')  # formato: AAAA-MM-DD
+from datetime import datetime, timedelta
 
 
 bcrypt = Bcrypt(app)  # Inicializa o bcrypt para criptografia segura
@@ -45,6 +43,7 @@ def validar_senha(senha):
     return bool(re.fullmatch(padrao, senha))
 
 
+#EMAIL DO EMPRESTIMO
 def email_emprestimo(email, texto):
 
 
@@ -93,11 +92,13 @@ def usuario():
 
 @app.route('/usuarios', methods=['POST'])
 def usuario_post():
-    nome = request.form.get('nome')
-    email = request.form.get('email')
-    senha = request.form.get('senha')
-    telefone = request.form.get('telefone')
-    data_nascimento = request.form.get('data_nascimento')
+    data = request.get_json()
+    nome = data.get('nome')
+    email = data.get('email')
+    senha = data.get('senha')
+    telefone = data.get('telefone')
+    data_nascimento = data.get('data_nascimento')  # formato dd-mm-aaaa
+    data_nascimento = datetime.strptime(data_nascimento, '%d-%m-%Y').date()
 
     if not validar_senha(senha):
         return jsonify({"error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."}), 404
@@ -124,7 +125,7 @@ def usuario_post():
             'email': email,
             'senha': senha,
             'telefone': telefone,
-            'data_nascimento': data_nascimento,
+            "data_nascimento": data_nascimento.strftime('%d-%m-%Y') if data_nascimento else None
         }
     })
 
@@ -412,7 +413,7 @@ def login():
                 "cargo": cargo,
                 "email": email,
                 "multa": multa,
-                "data_nascimento": data_nascimento,
+                "data_nascimento": data_nascimento.strftime('%d-%m-%Y') if data_nascimento else None,
                 "telefone": telefone
             }
         }), 200
@@ -724,13 +725,12 @@ def bibliotecario_post():
         }
     })
 
-@app.route('/emprestimos/<int:id_livro>', methods=['POST'])
-def emprestimos(id_livro):
-    from datetime import datetime, timedelta
+@app.route('/reservas/<int:id_livro>', methods=['POST'])
+def reservas(id_livro):
 
     # Formatação da data para "dia-mês-ano"
-    data_emprestimo = datetime.now().strftime('%Y-%m-%d')
-    data_devolucao = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+    data_reserva = datetime.now().strftime('%Y-%m-%d')
+    status = 1
 
     token = request.headers.get('Authorization')
     if not token:
@@ -760,7 +760,7 @@ def emprestimos(id_livro):
 
     if quantidade_disponivel <= 0:
         cursor.close()
-        return jsonify({"mensagem": "Livro não disponível para empréstimo"}), 400
+        return jsonify({"mensagem": "Livro não disponível para reserva"}), 400
 
     # Buscar o nome do usuário
     cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
@@ -775,28 +775,27 @@ def emprestimos(id_livro):
     try:
         # Inserir o empréstimo
         cursor.execute(
-            'INSERT INTO emprestimos(data_emprestimo, data_devolucao, id_livro, id_usuario) VALUES (?, ?, ?, ?)',
-            (data_emprestimo, data_devolucao, id_livro, id_usuario)
+            'INSERT INTO emprestimos(data_reserva, status, id_livro, id_usuario) VALUES (?, ?, ?, ?)',
+            (data_reserva, status, id_livro, id_usuario)
         )
         cursor.execute("UPDATE livros SET quantidade = quantidade - 1 WHERE id_livro = ?", (id_livro,))
         con.commit()
+        data_reserva = (datetime.now() + timedelta(days=1)).strftime('%d/%m/%Y')
+
 
         # Mensagem de e-mail personalizada
         texto = f"""
         Olá, {nome}! 👋
         
-        Seu empréstimo foi registrado com sucesso! 📚✨
+        Sua reserva foi registrada com sucesso! 📚✨
         
-        📝 **Informações do Empréstimo:**
+        📝 **Informações da Reserva:**
         • 📖 *Livro:* {titulo}
         • ✍️ *Autor:* {autor}
-        • 📅 *Data do Empréstimo:* {data_emprestimo}
-        • 📆 *Data de Devolução:* {data_devolucao}
+        • 📆 *Você tem até:* {data_reserva} para buscar seu livro
         
-        Lembre-se de devolver o livro até a data informada para evitar multas e permitir que outros também possam aproveitá-lo! 😉
-        
-        Boa leitura e até a próxima! 📕💡
-        
+        Lembre-se de buscar o livro até a data informada caso contrário su reserva será cancelada! 😉
+                
         Atenciosamente,  
         Equipe Asa Literária 🏛️
         """
@@ -810,22 +809,128 @@ def emprestimos(id_livro):
             flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
 
     except Exception as e:
-        return jsonify({"mensagem": f"Erro ao registrar empréstimo: {str(e)}"}), 500
+        return jsonify({"mensagem": f"Erro ao registrar reserva: {str(e)}"}), 500
     finally:
         cursor.close()
 
     return jsonify({
-        'message': 'Empréstimo realizado com sucesso!',
-        'emprestimo': {
+        'message': 'Reserva realizada com sucesso!',
+        'resrva': {
             'id_livro': id_livro,
             'titulo': titulo,
             'autor': autor,
             'id_usuario': id_usuario,
             'nome': nome,
-            'data_empréstimo': data_emprestimo,
-            'data_devolução': data_devolucao
+            'data_reserva': data_reserva
         }
     })
+
+
+@app.route('/emprestimos/<int:id_emprestimo>', methods=['PUT'])
+def emprestimos(id_emprestimo):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+        email = payload['email']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    # 🔧 cursor só é criado após o token ser validado
+    cursor = con.cursor()
+
+    # Buscar o ID do livro vinculado ao empréstimo
+    cursor.execute("SELECT id_livro FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        return jsonify({'mensagem': 'Empréstimo não encontrado'}), 404
+
+    id_livro = row[0]
+
+    # Buscar informações do livro
+    cursor.execute("SELECT titulo, autor FROM livros WHERE id_livro = ?", (id_livro,))
+    livro_data = cursor.fetchone()
+    if not livro_data:
+        cursor.close()
+        return jsonify({"mensagem": "Livro não encontrado"}), 404
+
+    titulo, autor = livro_data
+
+    # Buscar o nome do usuário
+    cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
+    usuario_data = cursor.fetchone()
+    if not usuario_data:
+        cursor.close()
+        return jsonify({"mensagem": "Usuário não encontrado"}), 404
+
+    nome = usuario_data[0]
+
+    # Verificar se o empréstimo existe
+    cursor.execute('SELECT * FROM EMPRESTIMOS WHERE ID_EMPRESTIMO = ?', (id_emprestimo,))
+    livro_data = cursor.fetchone()
+    if not livro_data:
+        cursor.close()
+        return jsonify({'error': 'O empréstimo informado não existe'}), 404
+
+    # Atualizar empréstimo
+    data_emprestimo = datetime.now().date()
+    data_devolucao = (datetime.now() + timedelta(days=7)).date()
+    status = 2  # Supondo que seja "em andamento"
+
+    cursor.execute(
+        'UPDATE EMPRESTIMOS SET data_emprestimo = ?, data_devolucao = ?, status = ? WHERE ID_EMPRESTIMO = ?',
+        (data_emprestimo, data_devolucao, status, id_emprestimo)
+    )
+
+    data_emprestimo = datetime.now().strftime('%d/%m/%Y')
+    data_devolucao = (datetime.now() + timedelta(days=7)).strftime('%d/%m/%Y')
+
+    # Mensagem de e-mail personalizada
+    texto = f"""
+    Olá, {nome}! 👋
+
+    Seu empréstimo foi registrado com sucesso! 📚✨
+
+    📝 **Informações da Reserva:**
+    • 📖 *Livro:* {titulo}
+    • ✍️ *Autor:* {autor}
+    • 📆 *Data do empréstimo:* {data_emprestimo}
+    • 📆 *Data da devolução:* {data_devolucao}
+
+    Lembre-se de devolver o livro até a data informada, caso contrário você devera pagar uma multa! 😉
+
+    Atenciosamente,  
+    Equipe Asa Literária 🏛️
+    """
+
+    try:
+        print(f"Enviando e-mail para: {email}")
+        email_emprestimo(email, texto)
+        print("E-mail enviado com sucesso!")
+    except Exception as email_error:
+        print(f"Erro ao enviar e-mail: {email_error}")
+        flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
+
+    con.commit()
+    cursor.close()
+
+    return jsonify({
+        'message': 'Empréstimo atualizado com sucesso!',
+        'livro': {
+            'data_emprestimo': data_emprestimo,
+            'data_devolucao': data_devolucao,
+            'status': status
+        }
+    })
+
+
 
 @app.route('/emprestimos', methods=['GET'])
 def emprestimos_get():
@@ -861,32 +966,45 @@ def emprestimos_get():
     return jsonify(emprestimos_cadastrados=emprestimos_dic)
 
 
-@app.route('/emprestimosusuario', methods=['GET'])
-def emprestimosusuario_get():
-    cur = con.cursor()
-    cur.execute('''
-        SELECT 
-            e.id_emprestimo, 
-            e.data_emprestimo, 
-            e.data_devolucao, 
-            e.data_devolvida, 
-            e.id_usuario, 
-            e.id_livro,
-            l.titulo AS titulo_livro,
-            l.autor AS autor_livro
-        FROM emprestimos e
-        JOIN livros l ON e.id_livro = l.id_livro
-    ''')
-    emprestimos = cur.fetchall()
-    emprestimos_dic = [{
-        'id_emprestimo': emprestimo[0],
-        'data_emprestimo': emprestimo[1].strftime('%d-%m-%Y'),
-        'data_devolucao': emprestimo[2].strftime('%d-%m-%Y'),
-        'data_devolvida': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
-        'id_usuario': emprestimo[4],
-        'id_livro': emprestimo[5],
-        'titulo_livro': emprestimo[6],
-        'autor_livro': emprestimo[7]
-    } for emprestimo in emprestimos]
+@app.route('/devolucao/<int:id_emprestimo>', methods=['POST'])
+def devolucao(id_emprestimo):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
 
-    return jsonify(emprestimos_cadastrados=emprestimos_dic)
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    cursor = con.cursor()
+
+    # Buscar o empréstimo para obter o ID do livro
+    cursor.execute("SELECT id_livro FROM emprestimos WHERE id_emprestimo = ? AND id_usuario = ?",
+                   (id_emprestimo, id_usuario))
+    emprestimo_data = cursor.fetchone()
+
+    if not emprestimo_data:
+        cursor.close()
+        return jsonify({"mensagem": "Empréstimo não encontrado ou não pertence ao usuário."}), 404
+
+    id_livro = emprestimo_data[0]
+
+    try:
+        # Excluir o registro do empréstimo
+        cursor.execute("DELETE FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
+
+        # Atualizar a quantidade do livro
+        cursor.execute("UPDATE livros SET QUANTIDADE = QUANTIDADE + 1 WHERE ID_LIVRO = ?", (id_livro,))
+        con.commit()
+
+    except Exception as e:
+        return jsonify({"mensagem": f"Erro ao processar a devolução: {str(e)}"}), 500
+    finally:
+        cursor.close()
+
+    return jsonify({"mensagem": "Devolução realizada com sucesso!"}), 200
