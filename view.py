@@ -815,7 +815,7 @@ def reservas(id_livro):
 
     return jsonify({
         'message': 'Reserva realizada com sucesso!',
-        'resrva': {
+        'reserva': {
             'id_livro': id_livro,
             'titulo': titulo,
             'autor': autor,
