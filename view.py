@@ -938,9 +938,11 @@ def reservas_get():
     cur.execute('''
         SELECT 
             e.id_emprestimo, 
+            e.data_reserva,
             e.data_emprestimo, 
             e.data_devolucao, 
             e.data_devolvida, 
+            e.status,
             e.id_usuario, 
             e.id_livro,
             u.nome AS nome_usuario,
@@ -953,14 +955,16 @@ def reservas_get():
     emprestimos = cur.fetchall()
     emprestimos_dic = [{
         'id_emprestimo': emprestimo[0],
-        'data_emprestimo': emprestimo[1].strftime('%d-%m-%Y'),
-        'data_devolucao': emprestimo[2].strftime('%d-%m-%Y'),
-        'data_devolvida': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
-        'id_usuario': emprestimo[4],
-        'id_livro': emprestimo[5],
-        'nome_usuario': emprestimo[6],
-        'titulo_livro': emprestimo[7],
-        'autor_livro': emprestimo[8]
+        'data_reserva': emprestimo[1].strftime('%d-%m-%Y') if emprestimo[1] else None,
+        'data_emprestimo': emprestimo[2].strftime('%d-%m-%Y') if emprestimo[2] else None,
+        'data_devolucao': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
+        'data_devolvida': emprestimo[4].strftime('%d-%m-%Y') if emprestimo[4] else None,
+        'status': emprestimo[5],
+        'id_usuario': emprestimo[6],
+        'id_livro': emprestimo[7],
+        'nome_usuario': emprestimo[8],
+        'titulo_livro': emprestimo[9],
+        'autor_livro': emprestimo[10]
     } for emprestimo in emprestimos]
 
     return jsonify(emprestimos_cadastrados=emprestimos_dic)
