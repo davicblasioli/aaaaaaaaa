@@ -1017,7 +1017,7 @@ def reservas_get_usuario(id_usuario=None):
     return jsonify(emprestimos_cadastrados=emprestimos_dic)
 
 
-@app.route('/devolucao/<int:id_emprestimo>', methods=['POST'])
+@app.route('/devolucao/<int:id_emprestimo>', methods=['PUT'])
 def devolucao(id_emprestimo):
     token = request.headers.get('Authorization')
     if not token:
@@ -1027,6 +1027,7 @@ def devolucao(id_emprestimo):
     try:
         payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
         id_usuario = payload['id_usuario']
+        email = payload['email']
     except jwt.ExpiredSignatureError:
         return jsonify({'mensagem': 'Token expirado'}), 401
     except jwt.InvalidTokenError:
@@ -1034,28 +1035,79 @@ def devolucao(id_emprestimo):
 
     cursor = con.cursor()
 
-    # Buscar o empréstimo para obter o ID do livro
-    cursor.execute("SELECT id_livro FROM emprestimos WHERE id_emprestimo = ? AND id_usuario = ?",
-                   (id_emprestimo, id_usuario))
+    # Buscar dados do empréstimo
+    cursor.execute('SELECT data_emprestimo, id_livro FROM emprestimos WHERE id_emprestimo = ? AND id_usuario = ?', (id_emprestimo, id_usuario))
     emprestimo_data = cursor.fetchone()
 
     if not emprestimo_data:
         cursor.close()
-        return jsonify({"mensagem": "Empréstimo não encontrado ou não pertence ao usuário."}), 404
+        return jsonify({'mensagem': 'Empréstimo não encontrado ou você não tem permissão para devolver este livro'}), 404
 
-    id_livro = emprestimo_data[0]
+    data_emprestimo, id_livro = emprestimo_data
+
+    # Verificar se o empréstimo foi realizado
+    if not data_emprestimo:
+        cursor.close()
+        return jsonify({'mensagem': 'Empréstimo ainda não foi realizado. Não é possível fazer a devolução.'}), 400
+
+    # Atualizar apenas data_devolvida e status
+    data_devolvida = datetime.now().date()
+    status = 3  # Ex: 3 = "devolvido"
+
+    cursor.execute(
+        'UPDATE emprestimos SET data_devolvida = ?, status = ? WHERE id_emprestimo = ?',
+        (data_devolvida, status, id_emprestimo)
+    )
+
+    # Atualizar quantidade de livros
+    cursor.execute("UPDATE livros SET quantidade = quantidade + 1 WHERE id_livro = ?", (id_livro,))
+
+    # Buscar dados do livro
+    cursor.execute("SELECT titulo, autor FROM livros WHERE id_livro = ?", (id_livro,))
+    livro_info = cursor.fetchone()
+    titulo, autor = livro_info if livro_info else ("Desconhecido", "Desconhecido")
+
+    # Buscar nome do usuário
+    cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
+    usuario_info = cursor.fetchone()
+    nome = usuario_info[0] if usuario_info else "Usuário"
+
+    con.commit()
+
+    # Enviar e-mail
+    data_devolvida_str = data_devolvida.strftime('%d/%m/%Y')
+    texto = f"""
+    Olá, {nome}! 👋
+
+    Seu livro foi devolvido com sucesso! 📚✨
+
+    📝 **Informações da Devolução:**
+    • 📖 *Livro:* {titulo}
+    • ✍️ *Autor:* {autor}
+    • 📆 *Data da devolução:* {data_devolvida_str}
+
+    Obrigado por utilizar nossa biblioteca! 😊
+
+    Atenciosamente,  
+    Equipe Asa Literária 🏛️
+    """
 
     try:
-        # Excluir o registro do empréstimo
-        cursor.execute("DELETE FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
+        print(f"Enviando e-mail para: {email}")
+        email_emprestimo(email, texto)
+        print("E-mail enviado com sucesso!")
+    except Exception as email_error:
+        print(f"Erro ao enviar e-mail: {email_error}")
+        flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
 
-        # Atualizar a quantidade do livro
-        cursor.execute("UPDATE livros SET QUANTIDADE = QUANTIDADE + 1 WHERE ID_LIVRO = ?", (id_livro,))
-        con.commit()
+    cursor.close()
 
-    except Exception as e:
-        return jsonify({"mensagem": f"Erro ao processar a devolução: {str(e)}"}), 500
-    finally:
-        cursor.close()
-
-    return jsonify({"mensagem": "Devolução realizada com sucesso!"}), 200
+    return jsonify({
+        'mensagem': 'Devolução registrada com sucesso!',
+        'devolucao': {
+            'id_emprestimo': id_emprestimo,
+            'titulo': titulo,
+            'autor': autor,
+            'data_devolvida': data_devolvida_str
+        }
+    })
