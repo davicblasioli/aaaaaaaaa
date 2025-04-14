@@ -643,13 +643,16 @@ def relatorio():
     livros = cursor.fetchall()
     cursor.close()
 
+    def safe_str(texto):
+        return str(texto).encode('latin-1', 'replace').decode('latin-1')
+
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
     # Título do relatório
     pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, "Relatório de Livros", ln=True, align='C')
+    pdf.cell(200, 10, safe_str("Relatório de Livros"), ln=True, align='C')
     pdf.ln(5)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
     pdf.ln(5)
@@ -660,24 +663,24 @@ def relatorio():
     # Loop para adicionar cada livro em formato de lista
     for livro in livros:
         pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
+        pdf.cell(0, 10, safe_str(f"Livro ID: {livro[0]}"), ln=True)
 
         pdf.set_font("Arial", size=10)
-        pdf.cell(0, 10, f"Livro ID: {livro[0]}", ln=True)
-        pdf.multi_cell(0, 7, f"Título: {livro[1]}")
-        pdf.multi_cell(0, 7, f"Autor: {livro[2]}")
-        pdf.multi_cell(0, 7, f"Publicação: {livro[3]}")
-        pdf.multi_cell(0, 7, f"ISBN: {livro[4]}")
-        pdf.multi_cell(0, 7, f"Descrição: {livro[5]}")
-        pdf.multi_cell(0, 7, f"Quantidade: {livro[6]}")
-        pdf.multi_cell(0, 7, f"Categoria: {livro[7]}")
+        pdf.cell(0, 10, safe_str(f"Livro ID: {livro[0]}"), ln=True)
+        pdf.multi_cell(0, 7, safe_str(f"Título: {livro[1]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Autor: {livro[2]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Publicação: {livro[3]}"))
+        pdf.multi_cell(0, 7, safe_str(f"ISBN: {livro[4]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Descrição: {livro[5]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Quantidade: {livro[6]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Categoria: {livro[7]}"))
 
-        pdf.ln(5)  # Adiciona espaço entre os livros
+        pdf.ln(5)  # Espaço entre os livros
 
     # Contador de livros
     pdf.ln(10)
     pdf.set_font("Arial", style='B', size=12)
-    pdf.cell(200, 10, f"Total de livros cadastrados: {len(livros)}", ln=True, align='C')
+    pdf.cell(200, 10, safe_str(f"Total de livros cadastrados: {len(livros)}"), ln=True, align='C')
 
     # Salva o arquivo PDF
     pdf_path = "relatorio_livros.pdf"
