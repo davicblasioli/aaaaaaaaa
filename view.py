@@ -970,6 +970,53 @@ def reservas_get():
     return jsonify(emprestimos_cadastrados=emprestimos_dic)
 
 
+@app.route('/reservasusuario/<int:id_usuario>', methods=['GET'])
+def reservas_get_usuario(id_usuario=None):
+    cur = con.cursor()
+
+    sql = '''
+        SELECT 
+            e.id_emprestimo, 
+            e.data_reserva,
+            e.data_emprestimo, 
+            e.data_devolucao, 
+            e.data_devolvida, 
+            e.status,
+            e.id_usuario, 
+            e.id_livro,
+            u.nome AS nome_usuario,
+            l.titulo AS titulo_livro,
+            l.autor AS autor_livro
+        FROM emprestimos e
+        JOIN usuarios u ON e.id_usuario = u.id_usuario
+        JOIN livros l ON e.id_livro = l.id_livro
+    '''
+
+    # Se um id_usuario foi passado na URL, filtra a query
+    if id_usuario is not None:
+        sql += ' WHERE e.id_usuario = ?'
+        cur.execute(sql, (id_usuario,))
+    else:
+        cur.execute(sql)
+
+    emprestimos = cur.fetchall()
+    emprestimos_dic = [{
+        'id_emprestimo': emprestimo[0],
+        'data_reserva': emprestimo[1].strftime('%d-%m-%Y') if emprestimo[1] else None,
+        'data_emprestimo': emprestimo[2].strftime('%d-%m-%Y') if emprestimo[2] else None,
+        'data_devolucao': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
+        'data_devolvida': emprestimo[4].strftime('%d-%m-%Y') if emprestimo[4] else None,
+        'status': emprestimo[5],
+        'id_usuario': emprestimo[6],
+        'id_livro': emprestimo[7],
+        'nome_usuario': emprestimo[8],
+        'titulo_livro': emprestimo[9],
+        'autor_livro': emprestimo[10]
+    } for emprestimo in emprestimos]
+
+    return jsonify(emprestimos_cadastrados=emprestimos_dic)
+
+
 @app.route('/devolucao/<int:id_emprestimo>', methods=['POST'])
 def devolucao(id_emprestimo):
     token = request.headers.get('Authorization')
