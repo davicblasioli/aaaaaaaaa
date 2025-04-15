@@ -139,19 +139,17 @@ def validar_senha(senha):
 
 
 #EMAIL DO EMPRESTIMO
-def email_emprestimo(email, texto):
+from email.mime.text import MIMEText
+import smtplib
 
-
+def email_emprestimo(email, texto, subject):
     if not email:
-        raise ValueError("Informações de sessão inválidas. Certifique-se de que 'email' e 'id_usuario' estão definidos.")
+        raise ValueError("Informações de sessão inválidas. Certifique-se de que 'email' está definido.")
 
-
-    subject = "Emprestimo realizado"
     sender = "equipe.asa.literaria@gmail.com"
-    recipients = [email]  # Lista de destinatários
+    recipients = [email]
     password = "yjfy kwcr nazh sirp"  # Substitua pela sua senha de aplicativo
 
-    # Enviar o e-mail
     try:
         msg = MIMEText(texto)
         msg['Subject'] = subject
@@ -888,6 +886,7 @@ def reservas(id_livro):
 
 
         # Mensagem de e-mail personalizada
+        assunto = "Reserva realizada com sucesso"
         texto = f"""
         Olá, {nome}! 👋
         
@@ -906,7 +905,7 @@ def reservas(id_livro):
 
         try:
             print(f"Enviando e-mail para: {email}")
-            email_emprestimo(email, texto)
+            email_emprestimo(email, texto, assunto)
             print("E-mail enviado com sucesso!")
         except Exception as email_error:
             print(f"Erro ao enviar e-mail: {email_error}")
@@ -1001,6 +1000,7 @@ def emprestimos(id_emprestimo):
     data_emprestimo = datetime.now().strftime('%d/%m/%Y')
     data_devolucao = (datetime.now() + timedelta(days=7)).strftime('%d/%m/%Y')
 
+    assunto = "Emprestimo realizada com sucesso"
     texto = f"""
     Olá, {nome}! 👋
 
@@ -1020,7 +1020,7 @@ def emprestimos(id_emprestimo):
 
     try:
         print(f"Enviando e-mail para: {email}")
-        email_emprestimo(email, texto)
+        email_emprestimo(email, texto, assunto)
         print("E-mail enviado com sucesso!")
     except Exception as email_error:
         print(f"Erro ao enviar e-mail: {email_error}")
@@ -1178,6 +1178,8 @@ def devolucao(id_emprestimo):
     con.commit()
 
     data_devolvida_str = data_devolvida.strftime('%d/%m/%Y')
+
+    assunto = "Devolução realizada com sucesso"
     texto = f"""
     Olá, {nome}! 👋
 
@@ -1196,7 +1198,7 @@ def devolucao(id_emprestimo):
 
     try:
         print(f"Enviando e-mail para: {email}")
-        email_emprestimo(email, texto)
+        email_emprestimo(email, texto, assunto)
         print("E-mail enviado com sucesso!")
     except Exception as email_error:
         print(f"Erro ao enviar e-mail: {email_error}")
@@ -1255,7 +1257,7 @@ def configmulta():
 
     return jsonify({
         'message': "Configuração de multa cadastrado com sucesso!",
-        'livro': {
+        'configuração': {
             'id': config_id,
             'valorfixo': valorfixo,
             'acrescimo': acrescimo,
@@ -1264,7 +1266,7 @@ def configmulta():
     }), 201
 
 
-@app.route('/editconfigmulta/<int:id>', methods=['PUT'])
+@app.route('/configmulta/<int:id>', methods=['PUT'])
 def configmulta_put(id):
     cursor = con.cursor()
     cursor.execute('SELECT ID_USUARIO, NOME, EMAIL FROM USUARIOS WHERE ID_USUARIO = ?', (id,))
@@ -1303,3 +1305,61 @@ def configmulta_put(id):
             'ano': ano
         }
     })
+
+
+@app.route('/configmulta', methods=['GET'])
+def configmulta_get():
+    cur = con.cursor()
+    cur.execute('SELECT id_config, valorfixo, acrescimo, ano FROM configmulta')
+    configmulta = cur.fetchall()
+    configmulta_dic = []
+    for configmulta in configmulta:
+        configmulta_dic.append({
+            'id_config': configmulta[0],
+            'valorfixo': configmulta[1],
+            'acrescimo': configmulta[2],
+            'ano': configmulta[3]
+        })
+    return jsonify(mensagem='Lista de Configurações', configuracoes=configmulta_dic)
+
+
+@app.route('/multas', methods=['POST'])
+def multas_post():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    # Recebendo os dados do formulário
+    data = request.get_json()
+    valor = data.get('valorfixo')
+
+    # Data de lançamento será a data atual
+    data_lancamento = datetime.now().date()  # ou .strftime('%Y-%m-%d') se precisar como string
+
+    cursor = con.cursor()
+
+    # Insere a configuração da multa e retorna o ID gerado
+    cursor.execute(
+        "INSERT INTO configmulta (valor, data_lancamento) VALUES (?, ?) RETURNING ID_Config",
+        (valor, data_lancamento)
+    )
+    config_id = cursor.fetchone()[0]
+    con.commit()
+
+    return jsonify({
+        'message': "Configuração de multa cadastrada com sucesso!",
+        'multa': {
+            'id': config_id,
+            'valor': valor,
+            'data_lancamento': data_lancamento.strftime('%d/%m/%Y')
+        }
+    }), 201
