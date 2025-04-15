@@ -1279,10 +1279,12 @@ def configmulta():
 @app.route('/configmulta/<int:id>', methods=['PUT'])
 def configmulta_put(id):
     cursor = con.cursor()
-    cursor.execute('SELECT ID_USUARIO, NOME, EMAIL FROM USUARIOS WHERE ID_USUARIO = ?', (id,))
-    usuario_data = cursor.fetchone()
 
-    if not usuario_data:
+    # Verifica se a configuração de multa existe pelo ID da configuração
+    cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ID_Config = ?', (id,))
+    config_data = cursor.fetchone()
+
+    if not config_data:
         cursor.close()
         return jsonify({'error': 'Configuração de multa não encontrada'}), 404
 
@@ -1291,25 +1293,25 @@ def configmulta_put(id):
     acrescimo = data.get('acrescimo')
     ano = data.get('ano')
 
-    # Atualiza apenas os campos que podem ser editados
-    cursor.execute('UPDATE CONFIGMULTA SET valorfixo = ?, acrescimo = ?, ano = ? WHERE ID_Config = ?',
-                   (valorfixo, acrescimo, ano, id))
-
-    con.commit()
-    cursor.close()
-
     # Verifica se o novo ano já existe no banco e pertence a outra configuração
-    cursor.execute('SELECT ID_config FROM CONFIGMULTA WHERE ano = ? AND ID_config <> ?', (ano, id))
+    cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ano = ? AND ID_Config <> ?', (ano, id))
     ano_existente = cursor.fetchone()
 
     if ano_existente:
         cursor.close()
         return jsonify({'error': 'O ano já está em uso em outra configuração'}), 400
 
+    # Atualiza apenas os campos da configuração
+    cursor.execute('UPDATE CONFIGMULTA SET valorfixo = ?, acrescimo = ?, ano = ? WHERE ID_Config = ?',
+                   (valorfixo, acrescimo, ano, id))
+
+    con.commit()
+    cursor.close()
+
     return jsonify({
         'message': 'Configuração de multa editada com sucesso!',
         'Configuração de multa': {
-            'id_usuario': id,
+            'id_config': id,
             'valorfixo': valorfixo,
             'acrescimo': acrescimo,
             'ano': ano
