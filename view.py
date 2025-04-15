@@ -723,13 +723,25 @@ def deletar_livro(id):
         cursor.close()
         return jsonify({"error": "Livro não encontrado"}), 404
 
-    # Excluir o livro
+    # Verificar se há empréstimos em andamento com esse livro
+    cursor.execute("SELECT 1 FROM emprestimos WHERE id_livro = ? AND status = 2", (id,))
+    if cursor.fetchone():
+        cursor.close()
+        return jsonify({'error': 'Não é possível excluir o livro com empréstimos em andamento'}), 400
+
+    # Verificar se há reservas ativas (por exemplo, status = 1) com esse livro
+    cursor.execute("SELECT 1 FROM emprestimos WHERE id_livro = ? AND status = 1", (id,))
+    if cursor.fetchone():
+        cursor.close()
+        return jsonify({'error': 'Não é possível excluir o livro com reservas ativas'}), 400
+
+    # Se passou pelas verificações, pode excluir o livro
     cursor.execute("DELETE FROM livros WHERE ID_LIVRO = ?", (id,))
     con.commit()
     cursor.close()
 
     return jsonify({
-        'message': "Livro excluido com sucesso!",
+        'message': "Livro excluído com sucesso!",
         'id_livro': id
     })
 
@@ -937,9 +949,7 @@ def emprestimos(id_emprestimo):
 
     token = remover_bearer(token)
     try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-        email = payload['email']
+        jwt.decode(token, senha_secreta, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
         return jsonify({'mensagem': 'Token expirado'}), 401
     except jwt.InvalidTokenError:
@@ -947,14 +957,14 @@ def emprestimos(id_emprestimo):
 
     cursor = con.cursor()
 
-    # Buscar o ID do livro vinculado ao empréstimo
-    cursor.execute("SELECT id_livro FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
+    # Buscar id_livro e id_usuario da tabela de empréstimos
+    cursor.execute("SELECT id_livro, id_usuario FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
     row = cursor.fetchone()
     if not row:
         cursor.close()
         return jsonify({'mensagem': 'Empréstimo não encontrado'}), 404
 
-    id_livro = row[0]
+    id_livro, id_usuario = row  # <-- Aqui pegamos o id_usuario do empréstimo
 
     # Buscar informações do livro
     cursor.execute("SELECT titulo, autor FROM livros WHERE id_livro = ?", (id_livro,))
@@ -965,16 +975,16 @@ def emprestimos(id_emprestimo):
 
     titulo, autor = livro_data
 
-    # Buscar o nome do usuário
-    cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
+    # Buscar nome e email do usuário a partir do id_usuario da tabela empréstimos
+    cursor.execute("SELECT nome, email FROM usuarios WHERE id_usuario = ?", (id_usuario,))
     usuario_data = cursor.fetchone()
     if not usuario_data:
         cursor.close()
         return jsonify({"mensagem": "Usuário não encontrado"}), 404
 
-    nome = usuario_data[0]
+    nome, email = usuario_data  # <-- Agora temos o nome e email corretos
 
-    # Verificar se o empréstimo existe e obter o status atual
+    # Verificar o status atual do empréstimo
     cursor.execute('SELECT status FROM EMPRESTIMOS WHERE ID_EMPRESTIMO = ?', (id_emprestimo,))
     emprestimo_data = cursor.fetchone()
     if not emprestimo_data:
@@ -987,7 +997,7 @@ def emprestimos(id_emprestimo):
         cursor.close()
         return jsonify({'mensagem': 'Esse empréstimo já foi realizado'}), 400
 
-    # Atualizar empréstimo
+    # Atualizar o empréstimo
     data_emprestimo = datetime.now().date()
     data_devolucao = (datetime.now() + timedelta(days=7)).date()
     status = 2  # Em andamento
@@ -997,22 +1007,22 @@ def emprestimos(id_emprestimo):
         (data_emprestimo, data_devolucao, status, id_emprestimo)
     )
 
-    data_emprestimo = datetime.now().strftime('%d/%m/%Y')
-    data_devolucao = (datetime.now() + timedelta(days=7)).strftime('%d/%m/%Y')
+    data_emprestimo_str = data_emprestimo.strftime('%d/%m/%Y')
+    data_devolucao_str = data_devolucao.strftime('%d/%m/%Y')
 
-    assunto = "Emprestimo realizada com sucesso"
+    assunto = "Empréstimo realizado com sucesso"
     texto = f"""
     Olá, {nome}! 👋
 
     Seu empréstimo foi registrado com sucesso! 📚✨
 
-    📝 **Informações da Reserva:**
+    📝 **Informações do Empréstimo:**
     • 📖 *Livro:* {titulo}
     • ✍️ *Autor:* {autor}
-    • 📆 *Data do empréstimo:* {data_emprestimo}
-    • 📆 *Data da devolução:* {data_devolucao}
+    • 📆 *Data do empréstimo:* {data_emprestimo_str}
+    • 📆 *Data da devolução:* {data_devolucao_str}
 
-    Lembre-se de devolver o livro até a data informada, caso contrário você devera pagar uma multa! 😉
+    Lembre-se de devolver o livro até a data informada, caso contrário você deverá pagar uma multa! 😉
 
     Atenciosamente,  
     Equipe Asa Literária 🏛️
@@ -1032,12 +1042,11 @@ def emprestimos(id_emprestimo):
     return jsonify({
         'message': 'Empréstimo atualizado com sucesso!',
         'livro': {
-            'data_emprestimo': data_emprestimo,
-            'data_devolucao': data_devolucao,
+            'data_emprestimo': data_emprestimo_str,
+            'data_devolucao': data_devolucao_str,
             'status': status
         }
     })
-
 
 
 @app.route('/reservas', methods=['GET'])
@@ -1133,9 +1142,7 @@ def devolucao(id_emprestimo):
 
     token = remover_bearer(token)
     try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-        email = payload['email']
+        jwt.decode(token, senha_secreta, algorithms=['HS256'])  # apenas valida o token
     except jwt.ExpiredSignatureError:
         return jsonify({'mensagem': 'Token expirado'}), 401
     except jwt.InvalidTokenError:
@@ -1143,15 +1150,15 @@ def devolucao(id_emprestimo):
 
     cursor = con.cursor()
 
-    # 🔧 Removida a verificação por id_usuario
-    cursor.execute('SELECT data_emprestimo, id_livro FROM emprestimos WHERE id_emprestimo = ?', (id_emprestimo,))
+    # Busca data de empréstimo, id_livro e id_usuario
+    cursor.execute('SELECT data_emprestimo, id_livro, id_usuario FROM emprestimos WHERE id_emprestimo = ?', (id_emprestimo,))
     emprestimo_data = cursor.fetchone()
 
     if not emprestimo_data:
         cursor.close()
         return jsonify({'mensagem': 'Empréstimo não encontrado'}), 404
 
-    data_emprestimo, id_livro = emprestimo_data
+    data_emprestimo, id_livro, id_usuario = emprestimo_data
 
     if not data_emprestimo:
         cursor.close()
@@ -1160,22 +1167,27 @@ def devolucao(id_emprestimo):
     data_devolvida = datetime.now().date()
     status = 3  # Devolvido
 
+    # Atualiza status e data de devolução
     cursor.execute(
         'UPDATE emprestimos SET data_devolvida = ?, status = ? WHERE id_emprestimo = ?',
         (data_devolvida, status, id_emprestimo)
     )
 
+    # Atualiza quantidade do livro
     cursor.execute("UPDATE livros SET quantidade = quantidade + 1 WHERE id_livro = ?", (id_livro,))
 
+    # Busca título e autor
     cursor.execute("SELECT titulo, autor FROM livros WHERE id_livro = ?", (id_livro,))
     livro_info = cursor.fetchone()
     titulo, autor = livro_info if livro_info else ("Desconhecido", "Desconhecido")
 
-    cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
+    # Busca nome e email do usuário
+    cursor.execute("SELECT nome, email FROM usuarios WHERE id_usuario = ?", (id_usuario,))
     usuario_info = cursor.fetchone()
-    nome = usuario_info[0] if usuario_info else "Usuário"
+    nome, email = usuario_info if usuario_info else ("Usuário", "sem-email@dominio.com")
 
     con.commit()
+    cursor.close()
 
     data_devolvida_str = data_devolvida.strftime('%d/%m/%Y')
 
@@ -1203,8 +1215,6 @@ def devolucao(id_emprestimo):
     except Exception as email_error:
         print(f"Erro ao enviar e-mail: {email_error}")
         flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
-
-    cursor.close()
 
     return jsonify({
         'mensagem': 'Devolução registrada com sucesso!',
