@@ -9,6 +9,101 @@ from email.mime.text import MIMEText
 import os
 import bcrypt
 from datetime import datetime, timedelta
+#INÍCIO DO PIX
+import qrcode
+from qrcode.constants import ERROR_CORRECT_H
+import crcmod
+
+def calcula_crc16(payload):
+    crc16 = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, rev=False)
+    crc = crc16(payload.encode('utf-8'))
+    return f"{crc:04X}"
+
+def format_tlv(id, value):
+    return f"{id}{len(value):02d}{value}"
+
+@app.route('/gerar_pix', methods=['POST'])
+def gerar_pix():
+    try:
+        data = request.get_json()
+        if not data or 'valor' not in data:
+            return jsonify({"erro": "O valor do PIX é obrigatório."}), 400
+
+        valor = f"{float(data['valor']):.2f}"
+
+        cursor = con.cursor()
+        cursor.execute("SELECT cg.NOME, cg.CHAVE_PIX, cg.CIDADE FROM PIX cg")
+        resultado = cursor.fetchone()
+        cursor.close()
+
+        if not resultado:
+            return jsonify({"erro": "Chave PIX não encontrada"}), 404
+
+        nome, chave_pix, cidade = resultado
+        nome = nome[:25] if nome else "Recebedor PIX"
+        cidade = cidade[:15] if cidade else "Cidade"
+
+        # Monta o campo 26 (Merchant Account Information) com TLVs internos
+        merchant_account_info = (
+                format_tlv("00", "br.gov.bcb.pix") +
+                format_tlv("01", chave_pix)
+        )
+        campo_26 = format_tlv("26", merchant_account_info)
+
+        payload_sem_crc = (
+                "000201" +  # Payload Format Indicator
+                "010212" +  # Point of Initiation Method
+                campo_26 +  # Merchant Account Information
+                "52040000" +  # Merchant Category Code
+                "5303986" +  # Currency - 986 = BRL
+                format_tlv("54", valor) +  # Transaction amount
+                "5802BR" +  # Country Code
+                format_tlv("59", nome) +  # Merchant Name
+                format_tlv("60", cidade) +  # Merchant City
+                format_tlv("62", format_tlv("05", "***")) +  # Additional data (TXID)
+                "6304"  # CRC placeholder
+        )
+
+        crc = calcula_crc16(payload_sem_crc)
+        payload_completo = payload_sem_crc + crc
+
+        # Criação do QR Code com configurações aprimoradas
+        qr_obj = qrcode.QRCode(
+            version=None,  # Permite ajuste automático da versão
+            error_correction=ERROR_CORRECT_H,  # Alta correção de erros (30%)
+            box_size=10,
+            border=4
+        )
+        qr_obj.add_data(payload_completo)
+        qr_obj.make(fit=True)
+        qr = qr_obj.make_image(fill_color="black", back_color="white")
+
+        # Cria a pasta 'upload/qrcodes' relativa ao diretório do projeto
+        pasta_qrcodes = os.path.join(os.getcwd(), "upload", "qrcodes")
+        os.makedirs(pasta_qrcodes, exist_ok=True)
+
+        # Conta quantos arquivos já existem com padrão 'pix_*.png'
+        arquivos_existentes = [f for f in os.listdir(pasta_qrcodes) if f.startswith("pix_") and f.endswith(".png")]
+        numeros_usados = []
+        for nome_arq in arquivos_existentes:
+            try:
+                num = int(nome_arq.replace("pix_", "").replace(".png", ""))
+                numeros_usados.append(num)
+            except ValueError:
+                continue
+        proximo_numero = max(numeros_usados, default=0) + 1
+        nome_arquivo = f"pix_{proximo_numero}.png"
+        caminho_arquivo = os.path.join(pasta_qrcodes, nome_arquivo)
+
+        # Salva o QR Code no disco
+        qr.save(caminho_arquivo)
+
+        print(payload_completo)
+
+        return send_file(caminho_arquivo, mimetype='image/png', as_attachment=True, download_name=nome_arquivo)
+    except Exception as e:
+        return jsonify({"erro": f"Ocorreu um erro internosse: {str(e)}"}), 500
+#FIM DO PIX
 
 
 bcrypt = Bcrypt(app)  # Inicializa o bcrypt para criptografia segura
@@ -295,23 +390,29 @@ def usuario_put(id):
     })
 
 
-@app.route('/usuarios/<int:id>', methods=['DELETE'])
-def deletar_usuarios(id):
+@app.route('/usuariosadm/<int:id_usuario>', methods=['DELETE'])
+def excluir_usuario(id_usuario):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({"error": "Token de autenticação não fornecido."}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        return jsonify({"error": "Token expirado."}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({"error": "Token inválido."}), 401
+
     cursor = con.cursor()
+    cursor.execute('SELECT * FROM usuarios WHERE id_usuario = ?', (id_usuario,))
+    usuario = cursor.fetchone()
+    if not usuario:
+        return jsonify({"error": "Usuário não encontrado."}), 404
 
-    cursor.execute("SELECT 1 FROM USUARIOS WHERE ID_USUARIO = ?", (id,))
-    if not cursor.fetchone():
-        cursor.close()
-        return jsonify({"error": "Usuario não encontrado"}), 404
-
-    cursor.execute("DELETE FROM USUARIOS WHERE ID_USUARIO = ?", (id,))
+    cursor.execute('DELETE FROM usuarios WHERE id_usuario = ?', (id_usuario,))
     con.commit()
-    cursor.close()
-
-    return jsonify({
-        'message': "Usuario excluido com sucesso!",
-        'id_usuario': id
-    })
+    return jsonify({"message": "Usuário excluído com sucesso."}), 200
 
 
 # ROTA PARA EDITAR PERFIL USANDO CARGO DE USUÁRIO NORMAL, BIBLIOTECÁRIO E ADMIN
@@ -845,7 +946,6 @@ def emprestimos(id_emprestimo):
     except jwt.InvalidTokenError:
         return jsonify({'mensagem': 'Token inválido'}), 401
 
-    # 🔧 cursor só é criado após o token ser validado
     cursor = con.cursor()
 
     # Buscar o ID do livro vinculado ao empréstimo
@@ -875,17 +975,23 @@ def emprestimos(id_emprestimo):
 
     nome = usuario_data[0]
 
-    # Verificar se o empréstimo existe
-    cursor.execute('SELECT * FROM EMPRESTIMOS WHERE ID_EMPRESTIMO = ?', (id_emprestimo,))
-    livro_data = cursor.fetchone()
-    if not livro_data:
+    # Verificar se o empréstimo existe e obter o status atual
+    cursor.execute('SELECT status FROM EMPRESTIMOS WHERE ID_EMPRESTIMO = ?', (id_emprestimo,))
+    emprestimo_data = cursor.fetchone()
+    if not emprestimo_data:
         cursor.close()
         return jsonify({'error': 'O empréstimo informado não existe'}), 404
+
+    status_atual = emprestimo_data[0]
+
+    if status_atual == 2:
+        cursor.close()
+        return jsonify({'mensagem': 'Esse empréstimo já foi realizado'}), 400
 
     # Atualizar empréstimo
     data_emprestimo = datetime.now().date()
     data_devolucao = (datetime.now() + timedelta(days=7)).date()
-    status = 2  # Supondo que seja "em andamento"
+    status = 2  # Em andamento
 
     cursor.execute(
         'UPDATE EMPRESTIMOS SET data_emprestimo = ?, data_devolucao = ?, status = ? WHERE ID_EMPRESTIMO = ?',
@@ -895,7 +1001,6 @@ def emprestimos(id_emprestimo):
     data_emprestimo = datetime.now().strftime('%d/%m/%Y')
     data_devolucao = (datetime.now() + timedelta(days=7)).strftime('%d/%m/%Y')
 
-    # Mensagem de e-mail personalizada
     texto = f"""
     Olá, {nome}! 👋
 
@@ -1038,46 +1143,40 @@ def devolucao(id_emprestimo):
 
     cursor = con.cursor()
 
-    # Buscar dados do empréstimo
-    cursor.execute('SELECT data_emprestimo, id_livro FROM emprestimos WHERE id_emprestimo = ? AND id_usuario = ?', (id_emprestimo, id_usuario))
+    # 🔧 Removida a verificação por id_usuario
+    cursor.execute('SELECT data_emprestimo, id_livro FROM emprestimos WHERE id_emprestimo = ?', (id_emprestimo,))
     emprestimo_data = cursor.fetchone()
 
     if not emprestimo_data:
         cursor.close()
-        return jsonify({'mensagem': 'Empréstimo não encontrado ou você não tem permissão para devolver este livro'}), 404
+        return jsonify({'mensagem': 'Empréstimo não encontrado'}), 404
 
     data_emprestimo, id_livro = emprestimo_data
 
-    # Verificar se o empréstimo foi realizado
     if not data_emprestimo:
         cursor.close()
         return jsonify({'mensagem': 'Empréstimo ainda não foi realizado. Não é possível fazer a devolução.'}), 400
 
-    # Atualizar apenas data_devolvida e status
     data_devolvida = datetime.now().date()
-    status = 3  # Ex: 3 = "devolvido"
+    status = 3  # Devolvido
 
     cursor.execute(
         'UPDATE emprestimos SET data_devolvida = ?, status = ? WHERE id_emprestimo = ?',
         (data_devolvida, status, id_emprestimo)
     )
 
-    # Atualizar quantidade de livros
     cursor.execute("UPDATE livros SET quantidade = quantidade + 1 WHERE id_livro = ?", (id_livro,))
 
-    # Buscar dados do livro
     cursor.execute("SELECT titulo, autor FROM livros WHERE id_livro = ?", (id_livro,))
     livro_info = cursor.fetchone()
     titulo, autor = livro_info if livro_info else ("Desconhecido", "Desconhecido")
 
-    # Buscar nome do usuário
     cursor.execute("SELECT nome FROM usuarios WHERE id_usuario = ?", (id_usuario,))
     usuario_info = cursor.fetchone()
     nome = usuario_info[0] if usuario_info else "Usuário"
 
     con.commit()
 
-    # Enviar e-mail
     data_devolvida_str = data_devolvida.strftime('%d/%m/%Y')
     texto = f"""
     Olá, {nome}! 👋
@@ -1112,5 +1211,95 @@ def devolucao(id_emprestimo):
             'titulo': titulo,
             'autor': autor,
             'data_devolvida': data_devolvida_str
+        }
+    })
+
+
+#ROTA DE MULTAS
+@app.route('/configmulta', methods=['POST'])
+def configmulta():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    # Recebendo os dados do formulário
+    data = request.get_json()
+    valorfixo = data.get('valorfixo')
+    acrescimo = data.get('acrescimo')
+    ano = data.get('ano')
+
+    cursor = con.cursor()
+
+    # Verifica se o ano já tem multa cadastrada
+    cursor.execute("SELECT 1 FROM configmulta WHERE ano = ?", (ano,))
+    if cursor.fetchone():
+        cursor.close()
+        return jsonify({"error": "Esse ano já tem um valor fixo"}), 400
+
+    # Insere a configuração da multa e retorna o ID gerado
+    cursor.execute(
+        "INSERT INTO configmulta (valorfixo, acrescimo, ano) VALUES (?, ?, ?) RETURNING ID_Config",
+        (valorfixo, acrescimo, ano)
+    )
+    config_id = cursor.fetchone()[0]
+    con.commit()
+
+    return jsonify({
+        'message': "Configuração de multa cadastrado com sucesso!",
+        'livro': {
+            'id': config_id,
+            'valorfixo': valorfixo,
+            'acrescimo': acrescimo,
+            'ano': ano
+        }
+    }), 201
+
+
+@app.route('/editconfigmulta/<int:id>', methods=['PUT'])
+def configmulta_put(id):
+    cursor = con.cursor()
+    cursor.execute('SELECT ID_USUARIO, NOME, EMAIL FROM USUARIOS WHERE ID_USUARIO = ?', (id,))
+    usuario_data = cursor.fetchone()
+
+    if not usuario_data:
+        cursor.close()
+        return jsonify({'error': 'Configuração de multa não encontrada'}), 404
+
+    data = request.get_json()
+    valorfixo = data.get('valorfixo')
+    acrescimo = data.get('acrescimo')
+    ano = data.get('ano')
+
+    # Atualiza apenas os campos que podem ser editados
+    cursor.execute('UPDATE CONFIGMULTA SET valorfixo = ?, acrescimo = ?, ano = ? WHERE ID_Config = ?',
+                   (valorfixo, acrescimo, ano, id))
+
+    con.commit()
+    cursor.close()
+
+    # Verifica se o novo ano já existe no banco e pertence a outra configuração
+    cursor.execute('SELECT ID_config FROM CONFIGMULTA WHERE ano = ? AND ID_config <> ?', (ano, id))
+    ano_existente = cursor.fetchone()
+
+    if ano_existente:
+        cursor.close()
+        return jsonify({'error': 'O ano já está em uso em outra configuração'}), 400
+
+    return jsonify({
+        'message': 'Configuração de multa editada com sucesso!',
+        'Configuração de multa': {
+            'id_usuario': id,
+            'valorfixo': valorfixo,
+            'acrescimo': acrescimo,
+            'ano': ano
         }
     })
