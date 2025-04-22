@@ -79,7 +79,7 @@ def gerar_pix():
         qr = qr_obj.make_image(fill_color="black", back_color="white")
 
         # Cria a pasta 'upload/qrcodes' relativa ao diretório do projeto
-        pasta_qrcodes = os.path.join(os.getcwd(), "upload", "qrcodes")
+        pasta_qrcodes = os.path.join(os.getcwd(), "static", "upload", "qrcodes")
         os.makedirs(pasta_qrcodes, exist_ok=True)
 
         # Conta quantos arquivos já existem com padrão 'pix_*.png'
@@ -1378,29 +1378,33 @@ def multas_post():
 
 
 #Barra de pesquisa
-@app.route('/pesquisa', methods=['GET'])
+@app.route('/pesquisar', methods=['GET'])  # Alias opcional
 def pesquisar_livros():
-    termo = request.args.get('q')  # Termo de busca (título ou autor)
+    termo = request.args.get('q')
     categoria = request.args.get('categoria')
-    ano = request.args.get('ano')
+    data_publicacao = request.args.get('data_publicacao')
 
     cursor = con.cursor()
 
-    # Montar consulta dinamicamente
-    query = "SELECT id_livro, titulo, autor, categoria, ano, quantidade FROM livros WHERE 1=1"
+    query = """
+        SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade 
+        FROM livros 
+        WHERE 1=1
+    """
     parametros = []
 
     if termo:
-        query += " AND (titulo LIKE ? OR autor LIKE ?)"
-        parametros.extend((f'%{termo}%', f'%{termo}%'))
+        query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+        termo_lower = f"%{termo.lower()}%"
+        parametros.extend((termo_lower, termo_lower))
 
     if categoria:
-        query += " AND categoria = ?"
-        parametros.append(categoria)
+        query += " AND LOWER(categoria) = ?"
+        parametros.append(categoria.lower())
 
-    if ano:
-        query += " AND ano = ?"
-        parametros.append(ano)
+    if data_publicacao:
+        query += " AND data_publicacao = ?"
+        parametros.append(data_publicacao)
 
     cursor.execute(query, parametros)
     livros = cursor.fetchall()
@@ -1414,7 +1418,7 @@ def pesquisar_livros():
         'titulo': l[1],
         'autor': l[2],
         'categoria': l[3],
-        'ano': l[4],
+        'data_publicacao': l[4],
         'quantidade': l[5]
     } for l in livros]
 
@@ -1422,3 +1426,4 @@ def pesquisar_livros():
         'mensagem': 'Resultado da pesquisa',
         'livros': livros_formatados
     })
+
