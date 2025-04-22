@@ -998,10 +998,11 @@ def bibliotecario_post():
         }
     })
 
+
 @app.route('/reservas/<int:id_livro>', methods=['POST'])
 def reservas(id_livro):
+    from datetime import datetime, timedelta
 
-    # Formatação da data para "dia-mês-ano"
     data_reserva = datetime.now().strftime('%Y-%m-%d')
     status = 1
 
@@ -1020,6 +1021,17 @@ def reservas(id_livro):
         return jsonify({'mensagem': 'Token inválido'}), 401
 
     cursor = con.cursor()
+
+    # Verificar se o usuário já possui uma reserva ou empréstimo para o mesmo livro
+    cursor.execute("""
+        SELECT COUNT(*) FROM emprestimos 
+        WHERE id_usuario = ? AND id_livro = ? AND status IN (1, 2)
+    """, (id_usuario, id_livro))
+    ja_reservado = cursor.fetchone()[0]
+
+    if ja_reservado > 0:
+        cursor.close()
+        return jsonify({"mensagem": "Você já possui uma reserva ou empréstimo ativo para este livro."}), 400
 
     # Buscar informações do livro
     cursor.execute("SELECT titulo, autor, quantidade FROM livros WHERE id_livro = ?", (id_livro,))
@@ -1055,21 +1067,20 @@ def reservas(id_livro):
         con.commit()
         data_reserva = (datetime.now() + timedelta(days=1)).strftime('%d/%m/%Y')
 
-
         # Mensagem de e-mail personalizada
         assunto = "Reserva realizada com sucesso"
         texto = f"""
         Olá, {nome}! 👋
-        
+
         Sua reserva foi registrada com sucesso! 📚✨
-        
+
         📝 **Informações da Reserva:**
         • 📖 *Livro:* {titulo}
         • ✍️ *Autor:* {autor}
         • 📆 *Você tem até:* {data_reserva} para buscar seu livro
-        
-        Lembre-se de buscar o livro até a data informada caso contrário su reserva será cancelada! 😉
-                
+
+        Lembre-se de buscar o livro até a data informada, caso contrário sua reserva será cancelada! 😉
+
         Atenciosamente,  
         Equipe Asa Literária 🏛️
         """

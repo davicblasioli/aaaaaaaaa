@@ -5,13 +5,14 @@ CREATE TABLE usuarios (
 	senha varchar(255) NOT NULL,
 	telefone varchar(20) NOT NULL,
 	data_nascimento date NOT NULL,
-	multa numeric(10,2),
 	cargo varchar(255) NOT NULL,
 	status varchar(255) NOT NULL,
 	tentativas_erro integer NOT NULL
 );
 
 ALTER TABLE USUARIOS ALTER COLUMN DATA_NASCIMENTO TYPE DATE;
+ALTER TABLE USUARIOS DROP multa;
+
 
 
 CREATE TABLE livros (
@@ -88,6 +89,10 @@ CREATE TABLE itens_emprestimo (
 	id_emprestimo integer,
 	FOREIGN KEY (id_emprestimo) REFERENCES emprestimos (id_emprestimo) ON DELETE CASCADE ON UPDATE CASCADE
 );
+
+ SELECT ID_CONFIG, VALORFIXO, ACRESCIMO
+    FROM CONFIGMULTA
+    WHERE  ANO = 2025
 
 
 ALTER TABLE usuarios ALTER COLUMN status SET DEFAULT 'Ativo';
