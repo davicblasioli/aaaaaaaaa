@@ -475,7 +475,7 @@ def login():
     senha = data.get('senha')
 
     cursor = con.cursor()
-    cursor.execute("SELECT SENHA, ID_USUARIO, NOME, CARGO, EMAIL, MULTA, DATA_NASCIMENTO, TELEFONE, STATUS, TENTATIVAS_ERRO FROM usuarios WHERE EMAIL = ?", (email,))
+    cursor.execute("SELECT SENHA, ID_USUARIO, NOME, CARGO, EMAIL, DATA_NASCIMENTO, TELEFONE, STATUS, TENTATIVAS_ERRO FROM usuarios WHERE EMAIL = ?", (email,))
     usuario = cursor.fetchone()
 
     if not usuario:
@@ -486,11 +486,10 @@ def login():
     nome = usuario[2]
     cargo = usuario[3]
     email = usuario[4]
-    multa = usuario[5]
-    data_nascimento = usuario[6]
-    telefone = usuario[7]
-    status = usuario[8]
-    tentativas_erro = usuario[9]
+    data_nascimento = usuario[5]
+    telefone = usuario[6]
+    status = usuario[7]
+    tentativas_erro = usuario[8]
 
     # Verifica se o usuário está inativo
     if status == 'Inativo':
@@ -511,7 +510,6 @@ def login():
                 "nome": nome,
                 "cargo": cargo,
                 "email": email,
-                "multa": multa,
                 "data_nascimento": data_nascimento.strftime('%d-%m-%Y') if data_nascimento else None,
                 "telefone": telefone
             }
@@ -855,8 +853,16 @@ def relatorio_usuarios():
 @app.route('/multas_relatorio', methods=['GET'])
 def relatorio_multas():
     cursor = con.cursor()
-    cursor.execute("SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios")
-    usuairios = cursor.fetchall()
+    cursor.execute("""
+        SELECT 
+            m.id_multa, m.valor, m.data_lancamento,
+            u.nome, u.email,
+            c.valorfixo, c.acrescimo, c.ano
+        FROM multas m
+        JOIN usuarios u ON m.id_usuario = u.id_usuario
+        JOIN configmulta c ON m.id_config = c.id_config
+    """)
+    multas = cursor.fetchall()
     cursor.close()
 
     def safe_str(texto):
@@ -868,7 +874,7 @@ def relatorio_multas():
 
     # Título do relatório
     pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, safe_str("Relatório de Usuarios"), ln=True, align='C')
+    pdf.cell(200, 10, safe_str("Relatório de Multas"), ln=True, align='C')
     pdf.ln(5)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
     pdf.ln(5)
@@ -876,29 +882,78 @@ def relatorio_multas():
     # Define a fonte para o conteúdo
     pdf.set_font("Arial", size=12)
 
-    # Loop para adicionar cada livro em formato de lista
-    for usuairio in usuairios:
+    for multa in multas:
+        id_multa, valor, data_lancamento, nome, email, valorfixo, acrescimo, ano = multa
+
         pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+        pdf.cell(0, 10, safe_str(f"Multa ID: {id_multa}"), ln=True)
 
         pdf.set_font("Arial", size=10)
-        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
-        pdf.multi_cell(0, 7, safe_str(f"Nome: {usuairio[1]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Email: {usuairio[2]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Telefone: {usuairio[3]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Data_nascimento: {usuairio[4]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Cargo: {usuairio[5]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Status: {usuairio[6]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Valor: R$ {valor:.2f}"))
+        pdf.multi_cell(0, 7, safe_str(f"Data de Lançamento: {data_lancamento.strftime('%d/%m/%Y')}"))
 
-        pdf.ln(5)  # Espaço entre os usuairios
+        pdf.multi_cell(0, 7, safe_str(f"Usuário: {nome} ({email})"))
+        pdf.multi_cell(0, 7, safe_str(f"Configuração: Valor fixo R$ {valorfixo:.2f}, Acréscimo {acrescimo}%, Ano {ano}"))
 
-    # Contador de usuairios
+        pdf.ln(5)  # Espaço entre as multas
+
+    # Total
     pdf.ln(10)
     pdf.set_font("Arial", style='B', size=12)
-    pdf.cell(200, 10, safe_str(f"Total de usuairios cadastrados: {len(usuairios)}"), ln=True, align='C')
+    pdf.cell(200, 10, safe_str(f"Total de multas cadastradas: {len(multas)}"), ln=True, align='C')
+
+    # Salvar PDF
+    pdf_path = "relatorio_multas.pdf"
+    pdf.output(pdf_path)
+
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
+
+@app.route('/emprestimos_relatorio', methods=['GET'])
+def relatorio_emprestimos():
+    cursor = con.cursor()
+    cursor.execute("SELECT * FROM emprestimos")  # Ajuste a consulta conforme necessário
+    emprestimos = cursor.fetchall()
+    cursor.close()
+
+    def safe_str(texto):
+        return str(texto).encode('latin-1', 'replace').decode('latin-1')
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Título do relatório
+    pdf.set_font("Arial", style='B', size=16)
+    pdf.cell(200, 10, safe_str("Relatório de Empréstimos"), ln=True, align='C')
+    pdf.ln(5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
+    pdf.ln(5)
+
+    # Define a fonte para o conteúdo
+    pdf.set_font("Arial", size=12)
+
+    # Loop para adicionar cada empréstimo em formato de lista
+    for emprestimo in emprestimos:
+        pdf.set_font("Arial", style='B', size=12)
+        pdf.cell(0, 10, safe_str(f"Empréstimo ID: {emprestimo[0]}"), ln=True)
+
+        pdf.set_font("Arial", size=10)
+        pdf.multi_cell(0, 7, safe_str(f"ID Livro: {emprestimo[1]}"))  # ID do livro
+        pdf.multi_cell(0, 7, safe_str(f"ID Usuário: {emprestimo[2]}"))  # ID do usuário
+        pdf.multi_cell(0, 7, safe_str(f"Data do Empréstimo: {emprestimo[3]}"))  # Data do empréstimo
+        pdf.multi_cell(0, 7, safe_str(f"Data de Devolução: {emprestimo[4]}"))  # Data de devolução
+        pdf.multi_cell(0, 7, safe_str(f"Status: {emprestimo[5]}"))  # Status do empréstimo
+
+        pdf.ln(5)  # Espaço entre os empréstimos
+
+    # Contador de empréstimos
+    pdf.ln(10)
+    pdf.set_font("Arial", style='B', size=12)
+    pdf.cell(200, 10, safe_str(f"Total de empréstimos registrados: {len(emprestimos)}"), ln=True, align='C')
 
     # Salva o arquivo PDF
-    pdf_path = "relatorio_usuairios.pdf"
+    pdf_path = "relatorio_emprestimos.pdf"
     pdf.output(pdf_path)
 
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
@@ -1528,53 +1583,108 @@ def listar_multas():
     return jsonify({'multas': multas_formatadas})
 
 
-#Barra de pesquisa
-@app.route('/pesquisar', methods=['GET'])  # Alias opcional
-def pesquisar_livros():
-    termo = request.args.get('q')
-    categoria = request.args.get('categoria')
-    data_publicacao = request.args.get('data_publicacao')
-
+@app.route('/multasusuario/<int:id_usuario>', methods=['GET'])
+def listar_multas_por_usuario(id_usuario):
     cursor = con.cursor()
 
     query = """
-        SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade 
-        FROM livros 
-        WHERE 1=1
+        SELECT 
+            m.id_multa,
+            m.valor,
+            m.data_lancamento,
+            u.nome,
+            u.email,
+            c.valorfixo,
+            c.acrescimo,
+            c.ano
+        FROM multas m
+        JOIN usuarios u ON m.id_usuario = u.id_usuario
+        JOIN configmulta c ON m.id_config = c.id_config
+        WHERE m.id_usuario = ?
     """
-    parametros = []
 
-    if termo:
-        query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
-        termo_lower = f"%{termo.lower()}%"
-        parametros.extend((termo_lower, termo_lower))
-
-    if categoria:
-        query += " AND LOWER(categoria) = ?"
-        parametros.append(categoria.lower())
-
-    if data_publicacao:
-        query += " AND data_publicacao = ?"
-        parametros.append(data_publicacao)
-
-    cursor.execute(query, parametros)
-    livros = cursor.fetchall()
+    cursor.execute(query, (id_usuario,))
+    resultados = cursor.fetchall()
     cursor.close()
 
-    if not livros:
-        return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
+    if not resultados:
+        return jsonify({'mensagem': 'Nenhuma multa encontrada para este usuário.'}), 404
 
-    livros_formatados = [{
-        'id_livro': l[0],
-        'titulo': l[1],
-        'autor': l[2],
-        'categoria': l[3],
-        'data_publicacao': l[4],
-        'quantidade': l[5]
-    } for l in livros]
+    multas_formatadas = []
+    for row in resultados:
+        id_multa, valor, data_lancamento, nome, email, valorfixo, acrescimo, ano = row
+        multas_formatadas.append({
+            'id_multa': id_multa,
+            'valor': float(valor),
+            'data_lancamento': data_lancamento.strftime('%d/%m/%Y'),
+            'usuario': {
+                'nome': nome,
+                'email': email
+            },
+            'configuracao': {
+                'valorfixo': float(valorfixo),
+                'acrescimo': float(acrescimo),
+                'ano': ano
+            }
+        })
 
-    return jsonify({
-        'mensagem': 'Resultado da pesquisa',
-        'livros': livros_formatados
-    })
+    return jsonify({'multas': multas_formatadas})
+
+
+
+
+#Barra de pesquisa
+@app.route('/pesquisar', methods=['GET'])
+def pesquisar_livros():
+    try:
+        termo = request.args.get('q')
+        categoria = request.args.get('categoria')
+        data_publicacao = request.args.get('data_publicacao')
+
+        cursor = con.cursor()
+
+        query = """
+            SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade 
+            FROM livros 
+            WHERE 1=1
+        """
+        parametros = []
+
+        if termo:
+            query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+            termo_lower = f"%{termo.lower()}%"
+            parametros.extend((termo_lower, termo_lower))
+
+        if categoria:
+            query += " AND LOWER(categoria) = ?"
+            parametros.append(categoria.lower())
+
+        if data_publicacao:
+            query += " AND data_publicacao = ?"
+            parametros.append(data_publicacao)
+
+        cursor.execute(query, parametros)
+        livros = cursor.fetchall()
+        cursor.close()
+
+        if not livros:
+            return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
+
+        livros_formatados = [{
+            'id_livro': l[0],
+            'titulo': l[1],
+            'autor': l[2],
+            'categoria': l[3],
+            'data_publicacao': l[4],
+            'quantidade': l[5]
+        } for l in livros]
+
+        return jsonify({
+            'mensagem': 'Resultado da pesquisa',
+            'livros': livros_formatados
+        })
+
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
 
