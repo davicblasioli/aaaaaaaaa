@@ -748,7 +748,7 @@ def deletar_livro(id):
 
 # ROTAS DE ADM
 @app.route('/livros_relatorio', methods=['GET'])
-def relatorio():
+def relatorio_livros():
     cursor = con.cursor()
     cursor.execute("SELECT * FROM livros")
     livros = cursor.fetchall()
@@ -795,6 +795,110 @@ def relatorio():
 
     # Salva o arquivo PDF
     pdf_path = "relatorio_livros.pdf"
+    pdf.output(pdf_path)
+
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
+
+@app.route('/usuarios_relatorio', methods=['GET'])
+def relatorio_usuarios():
+    cursor = con.cursor()
+    cursor.execute("SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios")
+    usuairios = cursor.fetchall()
+    cursor.close()
+
+    def safe_str(texto):
+        return str(texto).encode('latin-1', 'replace').decode('latin-1')
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Título do relatório
+    pdf.set_font("Arial", style='B', size=16)
+    pdf.cell(200, 10, safe_str("Relatório de Usuarios"), ln=True, align='C')
+    pdf.ln(5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
+    pdf.ln(5)
+
+    # Define a fonte para o conteúdo
+    pdf.set_font("Arial", size=12)
+
+    # Loop para adicionar cada livro em formato de lista
+    for usuairio in usuairios:
+        pdf.set_font("Arial", style='B', size=12)
+        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+        pdf.multi_cell(0, 7, safe_str(f"Nome: {usuairio[1]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Email: {usuairio[2]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Telefone: {usuairio[3]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Data_nascimento: {usuairio[4]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Cargo: {usuairio[5]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Status: {usuairio[6]}"))
+
+        pdf.ln(5)  # Espaço entre os usuairios
+
+    # Contador de usuairios
+    pdf.ln(10)
+    pdf.set_font("Arial", style='B', size=12)
+    pdf.cell(200, 10, safe_str(f"Total de usuairios cadastrados: {len(usuairios)}"), ln=True, align='C')
+
+    # Salva o arquivo PDF
+    pdf_path = "relatorio_usuairios.pdf"
+    pdf.output(pdf_path)
+
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
+
+@app.route('/multas_relatorio', methods=['GET'])
+def relatorio_multas():
+    cursor = con.cursor()
+    cursor.execute("SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios")
+    usuairios = cursor.fetchall()
+    cursor.close()
+
+    def safe_str(texto):
+        return str(texto).encode('latin-1', 'replace').decode('latin-1')
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Título do relatório
+    pdf.set_font("Arial", style='B', size=16)
+    pdf.cell(200, 10, safe_str("Relatório de Usuarios"), ln=True, align='C')
+    pdf.ln(5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
+    pdf.ln(5)
+
+    # Define a fonte para o conteúdo
+    pdf.set_font("Arial", size=12)
+
+    # Loop para adicionar cada livro em formato de lista
+    for usuairio in usuairios:
+        pdf.set_font("Arial", style='B', size=12)
+        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+        pdf.multi_cell(0, 7, safe_str(f"Nome: {usuairio[1]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Email: {usuairio[2]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Telefone: {usuairio[3]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Data_nascimento: {usuairio[4]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Cargo: {usuairio[5]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Status: {usuairio[6]}"))
+
+        pdf.ln(5)  # Espaço entre os usuairios
+
+    # Contador de usuairios
+    pdf.ln(10)
+    pdf.set_font("Arial", style='B', size=12)
+    pdf.cell(200, 10, safe_str(f"Total de usuairios cadastrados: {len(usuairios)}"), ln=True, align='C')
+
+    # Salva o arquivo PDF
+    pdf_path = "relatorio_usuairios.pdf"
     pdf.output(pdf_path)
 
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
@@ -1375,6 +1479,53 @@ def multas_post():
             'data_lancamento': data_lancamento.strftime('%d/%m/%Y')
         }
     }), 201
+
+
+@app.route('/multas', methods=['GET'])
+def listar_multas():
+    cursor = con.cursor()
+
+    query = """
+        SELECT 
+            m.id_multa,
+            m.valor,
+            m.data_lancamento,
+            u.nome,
+            u.email,
+            c.valorfixo,
+            c.acrescimo,
+            c.ano
+        FROM multas m
+        JOIN usuarios u ON m.id_usuario = u.id_usuario
+        JOIN configmulta c ON m.id_config = c.id_config
+    """
+
+    cursor.execute(query)
+    resultados = cursor.fetchall()
+    cursor.close()
+
+    if not resultados:
+        return jsonify({'mensagem': 'Nenhuma multa registrada.'}), 404
+
+    multas_formatadas = []
+    for row in resultados:
+        id_multa, valor, data_lancamento, nome, email, valorfixo, acrescimo, ano = row
+        multas_formatadas.append({
+            'id_multa': id_multa,
+            'valor': float(valor),
+            'data_lancamento': data_lancamento.strftime('%d/%m/%Y'),
+            'usuario': {
+                'nome': nome,
+                'email': email
+            },
+            'configuracao': {
+                'valorfixo': float(valorfixo),
+                'acrescimo': float(acrescimo),
+                'ano': ano
+            }
+        })
+
+    return jsonify({'multas': multas_formatadas})
 
 
 #Barra de pesquisa
