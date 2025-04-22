@@ -1375,3 +1375,50 @@ def multas_post():
             'data_lancamento': data_lancamento.strftime('%d/%m/%Y')
         }
     }), 201
+
+
+#Barra de pesquisa
+@app.route('/pesquisa', methods=['GET'])
+def pesquisar_livros():
+    termo = request.args.get('q')  # Termo de busca (título ou autor)
+    categoria = request.args.get('categoria')
+    ano = request.args.get('ano')
+
+    cursor = con.cursor()
+
+    # Montar consulta dinamicamente
+    query = "SELECT id_livro, titulo, autor, categoria, ano, quantidade FROM livros WHERE 1=1"
+    parametros = []
+
+    if termo:
+        query += " AND (titulo LIKE ? OR autor LIKE ?)"
+        parametros.extend((f'%{termo}%', f'%{termo}%'))
+
+    if categoria:
+        query += " AND categoria = ?"
+        parametros.append(categoria)
+
+    if ano:
+        query += " AND ano = ?"
+        parametros.append(ano)
+
+    cursor.execute(query, parametros)
+    livros = cursor.fetchall()
+    cursor.close()
+
+    if not livros:
+        return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
+
+    livros_formatados = [{
+        'id_livro': l[0],
+        'titulo': l[1],
+        'autor': l[2],
+        'categoria': l[3],
+        'ano': l[4],
+        'quantidade': l[5]
+    } for l in livros]
+
+    return jsonify({
+        'mensagem': 'Resultado da pesquisa',
+        'livros': livros_formatados
+    })
