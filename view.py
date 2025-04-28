@@ -1022,16 +1022,27 @@ def reservas(id_livro):
 
     cursor = con.cursor()
 
-    # Verificar se o usuário já possui uma reserva ou empréstimo para o mesmo livro
+    # Verificar se o usuário já possui uma reserva ou empréstimo pendente
     cursor.execute("""
         SELECT COUNT(*) FROM emprestimos 
-        WHERE id_usuario = ? AND id_livro = ? AND status IN (1, 2)
-    """, (id_usuario, id_livro))
+        WHERE id_usuario = ? AND status IN (1, 2)
+    """, (id_usuario,))
     ja_reservado = cursor.fetchone()[0]
 
     if ja_reservado > 0:
         cursor.close()
-        return jsonify({"mensagem": "Você já possui uma reserva ou empréstimo ativo para este livro."}), 400
+        return jsonify({"mensagem": "Você já possui uma reserva ou empréstimo ativo."}), 400
+
+    # Verificar se o usuário possui uma multa pendente
+    cursor.execute("""
+        SELECT COUNT(*) FROM multas 
+        WHERE id_usuario = ? AND status IN (1)
+    """, (id_usuario,))
+    multa_pendente = cursor.fetchone()[0]
+
+    if multa_pendente > 0:
+        cursor.close()
+        return jsonify({"mensagem": "Você tem uma multa pendente."}), 400
 
     # Buscar informações do livro
     cursor.execute("SELECT titulo, autor, quantidade FROM livros WHERE id_livro = ?", (id_livro,))
@@ -1463,7 +1474,7 @@ def configmulta_put(id):
     acrescimo = data.get('acrescimo')
     ano = data.get('ano')
 
-    # Verifica se o novo ano já existe no banco e pertence a outra configuração
+    # Verifica se o novo ano já está em uso por outra configuração
     cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ano = ? AND ID_Config <> ?', (ano, id))
     ano_existente = cursor.fetchone()
 
@@ -1471,7 +1482,22 @@ def configmulta_put(id):
         cursor.close()
         return jsonify({'error': 'O ano já está em uso em outra configuração'}), 400
 
-    # Atualiza apenas os campos da configuração
+    # 🔥 Verifica se já existe multa pendente para aquele ano (comparação direta com o ano inteiro)
+    cursor.execute('''
+        SELECT 1 
+        FROM EMPRESTIMOS 
+        WHERE ano = ? 
+          AND status_multa = 'pendente'
+        LIMIT 1
+    ''', (ano,))
+
+    multa_pendente = cursor.fetchone()
+
+    if multa_pendente:
+        cursor.close()
+        return jsonify({'error': f'Não é possível editar. Já existe multa pendente para o ano {ano}.'}), 400
+
+    # Atualiza a configuração
     cursor.execute('UPDATE CONFIGMULTA SET valorfixo = ?, acrescimo = ?, ano = ? WHERE ID_Config = ?',
                    (valorfixo, acrescimo, ano, id))
 
@@ -1489,6 +1515,7 @@ def configmulta_put(id):
     })
 
 
+
 @app.route('/configmulta', methods=['GET'])
 def configmulta_get():
     cur = con.cursor()
@@ -1503,48 +1530,6 @@ def configmulta_get():
             'ano': configmulta[3]
         })
     return jsonify(mensagem='Lista de Configurações', configuracoes=configmulta_dic)
-
-
-@app.route('/multas', methods=['POST'])
-def multas_post():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
-
-    token = remover_bearer(token)
-    try:
-        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        id_usuario = payload['id_usuario']
-    except jwt.ExpiredSignatureError:
-        return jsonify({'mensagem': 'Token expirado'}), 401
-    except jwt.InvalidTokenError:
-        return jsonify({'mensagem': 'Token inválido'}), 401
-
-    # Recebendo os dados do formulário
-    data = request.get_json()
-    valor = data.get('valorfixo')
-
-    # Data de lançamento será a data atual
-    data_lancamento = datetime.now().date()  # ou .strftime('%Y-%m-%d') se precisar como string
-
-    cursor = con.cursor()
-
-    # Insere a configuração da multa e retorna o ID gerado
-    cursor.execute(
-        "INSERT INTO configmulta (valor, data_lancamento) VALUES (?, ?) RETURNING ID_Config",
-        (valor, data_lancamento)
-    )
-    config_id = cursor.fetchone()[0]
-    con.commit()
-
-    return jsonify({
-        'message': "Configuração de multa cadastrada com sucesso!",
-        'multa': {
-            'id': config_id,
-            'valor': valor,
-            'data_lancamento': data_lancamento.strftime('%d/%m/%Y')
-        }
-    }), 201
 
 
 @app.route('/multas', methods=['GET'])
