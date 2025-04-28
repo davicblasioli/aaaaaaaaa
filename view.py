@@ -25,11 +25,21 @@ def format_tlv(id, value):
 @app.route('/gerar_pix', methods=['POST'])
 def gerar_pix():
     try:
-        data = request.get_json()
-        if not data or 'valor' not in data:
-            return jsonify({"erro": "O valor do PIX é obrigatório."}), 400
+        dados = request.get_json()
+        id_multa = dados.get('id_multa')
 
-        valor = f"{float(data['valor']):.2f}"
+        if not id_multa:
+            return jsonify({"erro": "ID da multa é obrigatório."}), 400
+
+        cursor = con.cursor()
+        cursor.execute("SELECT valor FROM multas WHERE id_multa = ?", (id_multa,))
+        resultado = cursor.fetchone()
+        cursor.close()
+
+        if not resultado:
+            return jsonify({"erro": "Multa não encontrada."}), 404
+
+        valor_multa = f"{resultado[0]:.2f}"
 
         cursor = con.cursor()
         cursor.execute("SELECT cg.NOME, cg.CHAVE_PIX, cg.CIDADE FROM PIX cg")
@@ -43,34 +53,32 @@ def gerar_pix():
         nome = nome[:25] if nome else "Recebedor PIX"
         cidade = cidade[:15] if cidade else "Cidade"
 
-        # Monta o campo 26 (Merchant Account Information) com TLVs internos
         merchant_account_info = (
-                format_tlv("00", "br.gov.bcb.pix") +
-                format_tlv("01", chave_pix)
+            format_tlv("00", "br.gov.bcb.pix") +
+            format_tlv("01", chave_pix)
         )
         campo_26 = format_tlv("26", merchant_account_info)
 
         payload_sem_crc = (
-                "000201" +  # Payload Format Indicator
-                "010212" +  # Point of Initiation Method
-                campo_26 +  # Merchant Account Information
-                "52040000" +  # Merchant Category Code
-                "5303986" +  # Currency - 986 = BRL
-                format_tlv("54", valor) +  # Transaction amount
-                "5802BR" +  # Country Code
-                format_tlv("59", nome) +  # Merchant Name
-                format_tlv("60", cidade) +  # Merchant City
-                format_tlv("62", format_tlv("05", "***")) +  # Additional data (TXID)
-                "6304"  # CRC placeholder
+            "000201" +
+            "010212" +
+            campo_26 +
+            "52040000" +
+            "5303986" +
+            format_tlv("54", valor_multa) +
+            "5802BR" +
+            format_tlv("59", nome) +
+            format_tlv("60", cidade) +
+            format_tlv("62", format_tlv("05", "***")) +
+            "6304"
         )
 
         crc = calcula_crc16(payload_sem_crc)
         payload_completo = payload_sem_crc + crc
 
-        # Criação do QR Code com configurações aprimoradas
         qr_obj = qrcode.QRCode(
-            version=None,  # Permite ajuste automático da versão
-            error_correction=ERROR_CORRECT_H,  # Alta correção de erros (30%)
+            version=None,
+            error_correction=ERROR_CORRECT_H,
             box_size=10,
             border=4
         )
@@ -78,11 +86,9 @@ def gerar_pix():
         qr_obj.make(fit=True)
         qr = qr_obj.make_image(fill_color="black", back_color="white")
 
-        # Cria a pasta 'upload/qrcodes' relativa ao diretório do projeto
         pasta_qrcodes = os.path.join(os.getcwd(), "static", "upload", "qrcodes")
         os.makedirs(pasta_qrcodes, exist_ok=True)
 
-        # Conta quantos arquivos já existem com padrão 'pix_*.png'
         arquivos_existentes = [f for f in os.listdir(pasta_qrcodes) if f.startswith("pix_") and f.endswith(".png")]
         numeros_usados = []
         for nome_arq in arquivos_existentes:
@@ -95,15 +101,15 @@ def gerar_pix():
         nome_arquivo = f"pix_{proximo_numero}.png"
         caminho_arquivo = os.path.join(pasta_qrcodes, nome_arquivo)
 
-        # Salva o QR Code no disco
         qr.save(caminho_arquivo)
 
         print(payload_completo)
 
         return send_file(caminho_arquivo, mimetype='image/png', as_attachment=True, download_name=nome_arquivo)
+
     except Exception as e:
-        return jsonify({"erro": f"Ocorreu um erro internosse: {str(e)}"}), 500
-#FIM DO PIX
+        return jsonify({"erro": f"Ocorreu um erro interno: {str(e)}"}), 500
+# FIM DO PIX
 
 
 bcrypt = Bcrypt(app)  # Inicializa o bcrypt para criptografia segura
