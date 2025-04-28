@@ -24,6 +24,20 @@ def format_tlv(id, value):
 
 @app.route('/gerar_pix', methods=['POST'])
 def gerar_pix():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        jwt.decode(token, senha_secreta, algorithms=['HS256'])  # apenas valida o token
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    cursor = con.cursor()
+
     try:
         dados = request.get_json()
         id_multa = dados.get('id_multa')
@@ -145,10 +159,13 @@ def validar_senha(senha):
 
 
 #EMAIL DO EMPRESTIMO
-from email.mime.text import MIMEText
 import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+import os
 
-def email_emprestimo(email, texto, subject):
+def email_emprestimo(email, texto, subject, anexo=None):
     if not email:
         raise ValueError("Informações de sessão inválidas. Certifique-se de que 'email' está definido.")
 
@@ -156,19 +173,31 @@ def email_emprestimo(email, texto, subject):
     recipients = [email]
     password = "yjfy kwcr nazh sirp"  # Substitua pela sua senha de aplicativo
 
-    try:
-        msg = MIMEText(texto)
-        msg['Subject'] = subject
-        msg['From'] = sender
-        msg['To'] = ', '.join(recipients)
+    msg = MIMEMultipart()
+    msg['Subject'] = subject
+    msg['From'] = sender
+    msg['To'] = ', '.join(recipients)
 
+    msg.attach(MIMEText(texto, 'plain'))
+
+    # Se houver anexo, anexa a imagem do QR Code
+    if anexo:
+        try:
+            with open(anexo, 'rb') as attachment:
+                img = MIMEImage(attachment.read())
+                img.add_header('Content-Disposition', 'attachment', filename=os.path.basename(anexo))
+                msg.attach(img)
+        except Exception as e:
+            raise RuntimeError(f"Erro ao anexar o arquivo: {e}")
+
+    try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp_server:
             smtp_server.login(sender, password)
             smtp_server.sendmail(sender, recipients, msg.as_string())
             print("Mensagem enviada com sucesso!")
-
     except Exception as e:
         raise RuntimeError(f"Erro ao enviar o e-mail: {e}")
+
 
 
 @app.route('/usuario', methods=['GET'])
@@ -859,15 +888,7 @@ def relatorio_usuarios():
 @app.route('/multas_relatorio', methods=['GET'])
 def relatorio_multas():
     cursor = con.cursor()
-    cursor.execute("""
-        SELECT 
-            m.id_multa, m.valor, m.data_lancamento,
-            u.nome, u.email,
-            c.valorfixo, c.acrescimo, c.ano
-        FROM multas m
-        JOIN usuarios u ON m.id_usuario = u.id_usuario
-        JOIN configmulta c ON m.id_config = c.id_config
-    """)
+    cursor.execute("SELECT * FROM multas")
     multas = cursor.fetchall()
     cursor.close()
 
@@ -888,27 +909,24 @@ def relatorio_multas():
     # Define a fonte para o conteúdo
     pdf.set_font("Arial", size=12)
 
+    # Loop para adicionar cada multa em formato de lista
     for multa in multas:
-        id_multa, valor, data_lancamento, nome, email, valorfixo, acrescimo, ano = multa
-
         pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, safe_str(f"Multa ID: {id_multa}"), ln=True)
+        pdf.cell(0, 10, safe_str(f"Multa ID: {multa[0]}"), ln=True)
 
         pdf.set_font("Arial", size=10)
-        pdf.multi_cell(0, 7, safe_str(f"Valor: R$ {valor:.2f}"))
-        pdf.multi_cell(0, 7, safe_str(f"Data de Lançamento: {data_lancamento.strftime('%d/%m/%Y')}"))
-
-        pdf.multi_cell(0, 7, safe_str(f"Usuário: {nome} ({email})"))
-        pdf.multi_cell(0, 7, safe_str(f"Configuração: Valor fixo R$ {valorfixo:.2f}, Acréscimo {acrescimo}%, Ano {ano}"))
+        pdf.multi_cell(0, 7, safe_str(f"Valor Fixo: R$ {multa[1]:.2f}"))
+        pdf.multi_cell(0, 7, safe_str(f"Acréscimo: R$ {multa[2]:.2f}"))
+        pdf.multi_cell(0, 7, safe_str(f"Ano: {multa[3]}"))
 
         pdf.ln(5)  # Espaço entre as multas
 
-    # Total
+    # Contador de multas
     pdf.ln(10)
     pdf.set_font("Arial", style='B', size=12)
     pdf.cell(200, 10, safe_str(f"Total de multas cadastradas: {len(multas)}"), ln=True, align='C')
 
-    # Salvar PDF
+    # Salva o arquivo PDF
     pdf_path = "relatorio_multas.pdf"
     pdf.output(pdf_path)
 
@@ -1329,7 +1347,7 @@ def devolucao(id_emprestimo):
 
     token = remover_bearer(token)
     try:
-        jwt.decode(token, senha_secreta, algorithms=['HS256'])  # apenas valida o token
+        jwt.decode(token, senha_secreta, algorithms=['HS256'])
     except jwt.ExpiredSignatureError:
         return jsonify({'mensagem': 'Token expirado'}), 401
     except jwt.InvalidTokenError:
@@ -1337,15 +1355,15 @@ def devolucao(id_emprestimo):
 
     cursor = con.cursor()
 
-    # Busca data de empréstimo, id_livro e id_usuario
-    cursor.execute('SELECT data_emprestimo, id_livro, id_usuario FROM emprestimos WHERE id_emprestimo = ?', (id_emprestimo,))
+    # Busca informações do empréstimo
+    cursor.execute('SELECT data_emprestimo, data_devolucao, id_livro, id_usuario FROM emprestimos WHERE id_emprestimo = ?', (id_emprestimo,))
     emprestimo_data = cursor.fetchone()
 
     if not emprestimo_data:
         cursor.close()
         return jsonify({'mensagem': 'Empréstimo não encontrado'}), 404
 
-    data_emprestimo, id_livro, id_usuario = emprestimo_data
+    data_emprestimo, data_devolucao, id_livro, id_usuario = emprestimo_data
 
     if not data_emprestimo:
         cursor.close()
@@ -1354,13 +1372,13 @@ def devolucao(id_emprestimo):
     data_devolvida = datetime.now().date()
     status = 3  # Devolvido
 
-    # Atualiza status e data de devolução
+    # Atualiza o empréstimo
     cursor.execute(
         'UPDATE emprestimos SET data_devolvida = ?, status = ? WHERE id_emprestimo = ?',
         (data_devolvida, status, id_emprestimo)
     )
 
-    # Atualiza quantidade do livro
+    # Atualiza a quantidade do livro
     cursor.execute("UPDATE livros SET quantidade = quantidade + 1 WHERE id_livro = ?", (id_livro,))
 
     # Busca título e autor
@@ -1368,7 +1386,7 @@ def devolucao(id_emprestimo):
     livro_info = cursor.fetchone()
     titulo, autor = livro_info if livro_info else ("Desconhecido", "Desconhecido")
 
-    # Busca nome e email do usuário
+    # Busca nome e e-mail do usuário
     cursor.execute("SELECT nome, email FROM usuarios WHERE id_usuario = ?", (id_usuario,))
     usuario_info = cursor.fetchone()
     nome, email = usuario_info if usuario_info else ("Usuário", "sem-email@dominio.com")
@@ -1378,30 +1396,128 @@ def devolucao(id_emprestimo):
 
     data_devolvida_str = data_devolvida.strftime('%d/%m/%Y')
 
-    assunto = "Devolução realizada com sucesso"
-    texto = f"""
-    Olá, {nome}! 👋
+    # Converte data_devolucao se necessário
+    data_devolucao_date = data_devolucao.date() if isinstance(data_devolucao, datetime) else data_devolucao
+    houve_atraso = data_devolvida > data_devolucao_date
 
-    Seu livro foi devolvido com sucesso! 📚✨
+    if houve_atraso:
+        # Busca valor da multa no banco
+        cursor = con.cursor()
+        cursor.execute('SELECT valor FROM multas WHERE id_usuario = ?', (id_usuario,))
+        multa_data = cursor.fetchone()
+        cursor.close()
 
-    📝 **Informações da Devolução:**
-    • 📖 *Livro:* {titulo}
-    • ✍️ *Autor:* {autor}
-    • 📆 *Data da devolução:* {data_devolvida_str}
+        if multa_data and multa_data[0] is not None:
+            valor_multa = multa_data[0]
+        else:
+            valor_multa = 0.00  # Caso não encontre a multa, valor 0
 
-    Obrigado por utilizar nossa biblioteca! 😊
+        # Gerar QR Code PIX da multa
+        cursor = con.cursor()
+        cursor.execute("SELECT NOME, CHAVE_PIX, CIDADE FROM PIX")
+        resultado = cursor.fetchone()
+        cursor.close()
 
-    Atenciosamente,  
-    Equipe Asa Literária 🏛️
-    """
+        if resultado:
+            nome_pix, chave_pix, cidade = resultado
+            nome_pix = nome_pix[:25] if nome_pix else "Recebedor PIX"
+            cidade = cidade[:15] if cidade else "Cidade"
 
-    try:
-        print(f"Enviando e-mail para: {email}")
-        email_emprestimo(email, texto, assunto)
-        print("E-mail enviado com sucesso!")
-    except Exception as email_error:
-        print(f"Erro ao enviar e-mail: {email_error}")
-        flash(f"Erro ao enviar o e-mail: {str(email_error)}", "error")
+            merchant_account_info = (
+                format_tlv("00", "br.gov.bcb.pix") +
+                format_tlv("01", chave_pix)
+            )
+            campo_26 = format_tlv("26", merchant_account_info)
+
+            payload_sem_crc = (
+                "000201" +
+                "010212" +
+                campo_26 +
+                "52040000" +
+                "5303986" +
+                format_tlv("54", f"{valor_multa:.2f}") +
+                "5802BR" +
+                format_tlv("59", nome_pix) +
+                format_tlv("60", cidade) +
+                format_tlv("62", format_tlv("05", "***")) +
+                "6304"
+            )
+
+            crc = calcula_crc16(payload_sem_crc)
+            payload_completo = payload_sem_crc + crc
+
+            # Gerar o QR Code
+            qr_obj = qrcode.QRCode(
+                version=None,
+                error_correction=ERROR_CORRECT_H,
+                box_size=10,
+                border=4
+            )
+            qr_obj.add_data(payload_completo)
+            qr_obj.make(fit=True)
+            qr = qr_obj.make_image(fill_color="black", back_color="white")
+
+            # Salvar o QR Code
+            pasta_qrcodes = os.path.join(os.getcwd(), "static", "upload", "qrcodes")
+            os.makedirs(pasta_qrcodes, exist_ok=True)
+
+            nome_arquivo = f"pix_multa_{id_emprestimo}.png"
+            caminho_arquivo = os.path.join(pasta_qrcodes, nome_arquivo)
+            qr.save(caminho_arquivo)
+        else:
+            caminho_arquivo = None
+
+        # Enviar e-mail de atraso com QR code
+        assunto = "Devolução realizada com atraso"
+        texto = f"""
+        Olá, {nome}! 👋
+
+        Seu livro foi devolvido, mas identificamos um atraso. 😟
+
+        📝 **Informações da Devolução:**
+        • 📖 *Livro:* {titulo}
+        • ✍️ *Autor:* {autor}
+        • 📆 *Data da devolução:* {data_devolvida_str}
+        • 💰 *Multa a ser paga:* R$ {valor_multa:.2f}
+
+        Para regularizar, pague a multa usando o QR Code em anexo ou entre em contato conosco!
+
+        Atenciosamente,  
+        Equipe Asa Literária 🏛️
+        """
+
+        try:
+            print(f"Enviando e-mail de multa para: {email}")
+            email_emprestimo(email, texto, assunto, anexo=caminho_arquivo)  # Envia o QR Code em anexo
+            print("E-mail de multa enviado com sucesso!")
+        except Exception as email_error:
+            print(f"Erro ao enviar e-mail de multa: {email_error}")
+
+    else:
+        # Enviar e-mail de devolução sem atraso
+        assunto = "Devolução realizada com sucesso"
+        texto = f"""
+        Olá, {nome}! 👋
+
+        Seu livro foi devolvido com sucesso! 📚✨
+
+        📝 **Informações da Devolução:**
+        • 📖 *Livro:* {titulo}
+        • ✍️ *Autor:* {autor}
+        • 📆 *Data da devolução:* {data_devolvida_str}
+
+        Obrigado por utilizar nossa biblioteca! 😊
+
+        Atenciosamente,  
+        Equipe Asa Literária 🏛️
+        """
+
+        try:
+            print(f"Enviando e-mail de devolução normal para: {email}")
+            email_emprestimo(email, texto, assunto)
+            print("E-mail de devolução enviado com sucesso!")
+        except Exception as email_error:
+            print(f"Erro ao enviar e-mail: {email_error}")
 
     return jsonify({
         'mensagem': 'Devolução registrada com sucesso!',
@@ -1409,9 +1525,12 @@ def devolucao(id_emprestimo):
             'id_emprestimo': id_emprestimo,
             'titulo': titulo,
             'autor': autor,
-            'data_devolvida': data_devolvida_str
+            'data_devolvida': data_devolvida_str,
+            'houve_atraso': houve_atraso,
+            'dias_atraso': (data_devolvida - data_devolucao_date).days if houve_atraso else 0
         }
     })
+
 
 
 #ROTA DE MULTAS
