@@ -26,7 +26,6 @@ class PDFRelatorio(FPDF):
         self.cell(0, 10, f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}', 0, 0, 'C')
 
 
-
 #INÍCIO DO PIX
 import qrcode
 from qrcode.constants import ERROR_CORRECT_H
@@ -584,25 +583,25 @@ def login():
 @app.route('/livro/<int:id>', methods=['GET'])
 def livro_buscar(id):
     cur = con.cursor()
-    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM livros WHERE ID_LIVRO =?', (id,))
-    livros = cur.fetchall()
+    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria FROM livros WHERE id_livro = ?', (id,))
+    livro = cur.fetchone()
 
-    if not livros:
-        return jsonify({"error": "Nenhum livro encontrado."}), 400
+    if not livro:
+        return jsonify({"error": "Nenhum livro encontrado."}), 404
 
-    livros_dic = []
-    for livros in livros:
-        livros_dic.append({
-            'id_livro': livros[0],
-            'titulo': livros[1],
-            'autor': livros[2],
-            'data_publicacao': livros[3],
-            'ISBN': livros[4],
-            'descricao': livros[5],
-            'quantidade': livros[6],
-            'categoria': livros[7]
-        })
-    return jsonify(mensagem='Lista de Livros', livros=livros_dic)
+    livro_dic = {
+        'id_livro': livro[0],
+        'titulo': livro[1],
+        'autor': livro[2],
+        'data_publicacao': livro[3],
+        'ISBN': livro[4],
+        'descricao': livro[5],
+        'quantidade': livro[6],
+        'categoria': livro[7]
+    }
+
+    return jsonify(livro=livro_dic), 200
+
 
 @app.route('/livro', methods=['GET'])
 def livro():
@@ -1897,3 +1896,78 @@ def pesquisar_livros():
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
+
+#AVALIAÇÃO DE LIVROS
+from flask import request, jsonify
+from datetime import datetime
+import jwt
+
+@app.route('/avaliacao', methods=['POST'])
+def adicionar_avaliacao():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload.get('id_usuario')
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    dados = request.get_json()
+    id_livro = dados.get('id_livro')
+    nota = dados.get('nota')
+    comentario = dados.get('comentario', '')
+
+    if not id_livro or nota is None:
+        return jsonify({'mensagem': 'Campos id_livro e nota são obrigatórios'}), 400
+    if not (0 <= nota <= 5):
+        return jsonify({'mensagem': 'A nota deve estar entre 0 e 5'}), 400
+
+    cursor = con.cursor()
+
+    # Verifica se o livro existe
+    cursor.execute("SELECT 1 FROM livros WHERE id_livro = ?", (id_livro,))
+    if not cursor.fetchone():
+        cursor.close()
+        return jsonify({'mensagem': 'Livro não encontrado'}), 404
+
+    # Verifica se o usuário já avaliou esse livro
+    cursor.execute("""
+        SELECT id FROM avaliacao WHERE id_usuario = ? AND id_livro = ?
+    """, (id_usuario, id_livro))
+    avaliacao_existente = cursor.fetchone()
+
+    data_avaliacao = datetime.now().date()
+
+    if avaliacao_existente:
+        # Atualiza a avaliação existente
+        cursor.execute("""
+            UPDATE avaliacao
+            SET nota = ?, comentario = ?, data_avaliacao = ?
+            WHERE id_usuario = ? AND id_livro = ?
+        """, (nota, comentario, data_avaliacao, id_usuario, id_livro))
+    else:
+        # Insere nova avaliação
+        cursor.execute("""
+            INSERT INTO avaliacao (nota, data_avaliacao, comentario, id_usuario, id_livro)
+            VALUES (?, ?, ?, ?, ?)
+        """, (nota, data_avaliacao, comentario, id_usuario, id_livro))
+
+    con.commit()
+    cursor.close()
+
+    return jsonify({
+        'mensagem': 'Avaliação registrada com sucesso!',
+        'avaliacao': {
+            'id_usuario': id_usuario,
+            'id_livro': id_livro,
+            'nota': nota,
+            'comentario': comentario,
+            'data_avaliacao': data_avaliacao.strftime('%d/%m/%Y')
+        }
+    }), 201
