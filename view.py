@@ -9,18 +9,39 @@ from email.mime.text import MIMEText
 import os
 import bcrypt
 from datetime import datetime, timedelta
+from io import BytesIO
+
+
+class PDFRelatorio(FPDF):
+    def header(self):
+        self.set_font("Arial", 'B', 16)
+        self.cell(200, 10, "Relatório de Empréstimos", ln=True, align='C')
+        self.set_line_width(0.5)
+        self.line(10, self.get_y(), 200, self.get_y())
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}', 0, 0, 'C')
+
+
+
 #INÍCIO DO PIX
 import qrcode
 from qrcode.constants import ERROR_CORRECT_H
 import crcmod
+
 
 def calcula_crc16(payload):
     crc16 = crcmod.mkCrcFun(0x11021, initCrc=0xFFFF, rev=False)
     crc = crc16(payload.encode('utf-8'))
     return f"{crc:04X}"
 
+
 def format_tlv(id, value):
     return f"{id}{len(value):02d}{value}"
+
 
 @app.route('/gerar_pix', methods=['POST'])
 def gerar_pix():
@@ -159,11 +180,8 @@ def validar_senha(senha):
 
 
 #EMAIL DO EMPRESTIMO
-import smtplib
 from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
-import os
 
 def email_emprestimo(email, texto, subject, anexo=None):
     if not email:
@@ -197,7 +215,6 @@ def email_emprestimo(email, texto, subject, anexo=None):
             print("Mensagem enviada com sucesso!")
     except Exception as e:
         raise RuntimeError(f"Erro ao enviar o e-mail: {e}")
-
 
 
 @app.route('/usuario', methods=['GET'])
@@ -781,7 +798,7 @@ def deletar_livro(id):
 
 # ROTAS DE ADM
 @app.route('/livros_relatorio', methods=['GET'])
-def relatorio_livros():
+def relatorio():
     cursor = con.cursor()
     cursor.execute("SELECT * FROM livros")
     livros = cursor.fetchall()
@@ -806,11 +823,12 @@ def relatorio_livros():
 
     # Loop para adicionar cada livro em formato de lista
     for livro in livros:
+        # ID do livro
         pdf.set_font("Arial", style='B', size=12)
         pdf.cell(0, 10, safe_str(f"Livro ID: {livro[0]}"), ln=True)
 
+        # Informações do livro
         pdf.set_font("Arial", size=10)
-        pdf.cell(0, 10, safe_str(f"Livro ID: {livro[0]}"), ln=True)
         pdf.multi_cell(0, 7, safe_str(f"Título: {livro[1]}"))
         pdf.multi_cell(0, 7, safe_str(f"Autor: {livro[2]}"))
         pdf.multi_cell(0, 7, safe_str(f"Publicação: {livro[3]}"))
@@ -863,7 +881,6 @@ def relatorio_usuarios():
         pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
 
         pdf.set_font("Arial", size=10)
-        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
         pdf.multi_cell(0, 7, safe_str(f"Nome: {usuairio[1]}"))
         pdf.multi_cell(0, 7, safe_str(f"Email: {usuairio[2]}"))
         pdf.multi_cell(0, 7, safe_str(f"Telefone: {usuairio[3]}"))
@@ -888,7 +905,13 @@ def relatorio_usuarios():
 @app.route('/multas_relatorio', methods=['GET'])
 def relatorio_multas():
     cursor = con.cursor()
-    cursor.execute("SELECT * FROM multas")
+
+    # Consulta para obter as multas com o nome do usuário
+    cursor.execute("""
+        SELECT m.valor, u.nome, m.data_lancamento 
+        FROM multas m
+        JOIN usuarios u ON m.id_usuario = u.id_usuario
+    """)
     multas = cursor.fetchall()
     cursor.close()
 
@@ -911,13 +934,14 @@ def relatorio_multas():
 
     # Loop para adicionar cada multa em formato de lista
     for multa in multas:
+        valor, nome_usuario, data_lancamento = multa
+
         pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, safe_str(f"Multa ID: {multa[0]}"), ln=True)
+        pdf.cell(0, 10, safe_str(f"Nome do Usuário: {nome_usuario}"), ln=True)
 
         pdf.set_font("Arial", size=10)
-        pdf.multi_cell(0, 7, safe_str(f"Valor Fixo: R$ {multa[1]:.2f}"))
-        pdf.multi_cell(0, 7, safe_str(f"Acréscimo: R$ {multa[2]:.2f}"))
-        pdf.multi_cell(0, 7, safe_str(f"Ano: {multa[3]}"))
+        pdf.multi_cell(0, 7, safe_str(f"Valor: R$ {valor:.2f}"))
+        pdf.multi_cell(0, 7, safe_str(f"Data de lançamento da multa: {data_lancamento}"))
 
         pdf.ln(5)  # Espaço entre as multas
 
@@ -935,52 +959,122 @@ def relatorio_multas():
 
 @app.route('/emprestimos_relatorio', methods=['GET'])
 def relatorio_emprestimos():
-    cursor = con.cursor()
-    cursor.execute("SELECT * FROM emprestimos")  # Ajuste a consulta conforme necessário
-    emprestimos = cursor.fetchall()
-    cursor.close()
+    try:
+        cursor = con.cursor()
+        cursor.execute("""
+            SELECT 
+                e.id_emprestimo, 
+                l.titulo, 
+                u.nome, 
+                u.email, 
+                e.status, 
+                e.data_emprestimo, 
+                e.data_devolucao,
+                e.data_devolvida
+            FROM emprestimos e
+            JOIN livros l ON e.id_livro = l.id_livro
+            JOIN usuarios u ON e.id_usuario = u.id_usuario
+            WHERE e.status IN (1, 2, 3)
+            ORDER BY e.status, e.data_emprestimo
+        """)
+        emprestimos = cursor.fetchall()
+        cursor.close()
+    except Exception as e:
+        return jsonify({"erro": f"Erro ao buscar dados do banco: {str(e)}"}), 500
 
     def safe_str(texto):
         return str(texto).encode('latin-1', 'replace').decode('latin-1')
 
-    pdf = FPDF()
+    def formatar_data(data):
+        if isinstance(data, datetime):
+            return data.strftime('%d/%m/%Y')
+        try:
+            return datetime.strptime(str(data), '%Y-%m-%d').strftime('%d/%m/%Y')
+        except:
+            return str(data)
+
+    def traduzir_status(status):
+        return {
+            1: "Reservado",
+            2: "Emprestado",
+            3: "Devolvido"
+        }.get(status, f"Desconhecido ({status})")
+
+    pdf = PDFRelatorio()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+    pdf.set_font("Arial", size=11)
 
-    # Título do relatório
-    pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, safe_str("Relatório de Empréstimos"), ln=True, align='C')
-    pdf.ln(5)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
-    pdf.ln(5)
+    grupos = {
+        1: "Livros Reservados",
+        2: "Livros Emprestados",
+        3: "Livros Devolvidos"
+    }
 
-    # Define a fonte para o conteúdo
-    pdf.set_font("Arial", size=12)
+    for status_grupo in [1, 2, 3]:
+        emprestimos_filtrados = [e for e in emprestimos if e[4] == status_grupo]
+        if not emprestimos_filtrados:
+            continue
 
-    # Loop para adicionar cada empréstimo em formato de lista
-    for emprestimo in emprestimos:
-        pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, safe_str(f"Empréstimo ID: {emprestimo[0]}"), ln=True)
+        # Título da seção
+        pdf.set_font("Arial", 'B', 13)
+        pdf.set_fill_color(200, 220, 255)
+        pdf.cell(0, 10, grupos[status_grupo], ln=True, fill=True)
+        pdf.ln(2)
 
-        pdf.set_font("Arial", size=10)
-        pdf.multi_cell(0, 7, safe_str(f"ID Livro: {emprestimo[1]}"))  # ID do livro
-        pdf.multi_cell(0, 7, safe_str(f"ID Usuário: {emprestimo[2]}"))  # ID do usuário
-        pdf.multi_cell(0, 7, safe_str(f"Data do Empréstimo: {emprestimo[3]}"))  # Data do empréstimo
-        pdf.multi_cell(0, 7, safe_str(f"Data de Devolução: {emprestimo[4]}"))  # Data de devolução
-        pdf.multi_cell(0, 7, safe_str(f"Status: {emprestimo[5]}"))  # Status do empréstimo
+        for e in emprestimos_filtrados:
+            id_emp, titulo, nome, email, status, data_emp, data_dev, data_devolvida = e
 
-        pdf.ln(5)  # Espaço entre os empréstimos
+            pdf.set_fill_color(245, 245, 245)
+            pdf.set_draw_color(180, 180, 180)
 
-    # Contador de empréstimos
-    pdf.ln(10)
-    pdf.set_font("Arial", style='B', size=12)
-    pdf.cell(200, 10, safe_str(f"Total de empréstimos registrados: {len(emprestimos)}"), ln=True, align='C')
+            pdf.set_font("Arial", 'B', 12)
+            pdf.cell(0, 10, f"Empréstimo Nº {id_emp}", ln=True, fill=True, border=1)
 
-    # Salva o arquivo PDF
-    pdf_path = "relatorio_emprestimos.pdf"
-    pdf.output(pdf_path)
+            pdf.set_font("Arial", '', 11)
+            pdf.cell(0, 8, f"Livro: {safe_str(titulo)}", ln=True, fill=True, border=1)
+            pdf.cell(0, 8, f"Usuário: {safe_str(nome)}", ln=True, fill=True, border=1)
+            pdf.cell(0, 8, f"Email: {safe_str(email)}", ln=True, fill=True, border=1)
+            pdf.cell(0, 8, f"Status: {traduzir_status(status)}", ln=True, fill=True, border=1)
 
-    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+            # Datas
+            if status == 1:
+                texto_emp = "Ainda não emprestado"
+                texto_dev = "Ainda não emprestado"
+            elif status == 4:
+                texto_emp = "Empréstimo cancelado"
+                texto_dev = "Empréstimo cancelado"
+            else:
+                texto_emp = formatar_data(data_emp)
+                texto_dev = formatar_data(data_dev)
+
+            pdf.cell(0, 8, f"Data Empréstimo: {texto_emp}", ln=True, fill=True, border=1)
+            pdf.cell(0, 8, f"Data Prevista Devolução: {texto_dev}", ln=True, fill=True, border=1)
+
+            if data_devolvida:
+                texto_devolvida = f"Data Devolvida: {formatar_data(data_devolvida)}"
+            else:
+                texto_devolvida = "Data Devolvida: Livro não devolvido"
+
+            pdf.cell(0, 8, texto_devolvida, ln=True, fill=True, border=1)
+            pdf.ln(6)
+
+        pdf.ln(5)
+
+    pdf.set_font("Arial", 'B', 12)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.cell(0, 10, f"Total de empréstimos listados: {len(emprestimos)}", ln=True, align='C', fill=True)
+
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')
+    pdf_buffer = BytesIO(pdf_bytes)
+
+    return send_file(
+        pdf_buffer,
+        as_attachment=True,
+        download_name="relatorio_emprestimos.pdf",
+        mimetype='application/pdf'
+    )
+
 
 
 @app.route('/bibliotecario', methods=['POST'])
@@ -1532,7 +1626,6 @@ def devolucao(id_emprestimo):
     })
 
 
-
 #ROTA DE MULTAS
 @app.route('/configmulta', methods=['POST'])
 def configmulta():
@@ -1638,7 +1731,6 @@ def configmulta_put(id):
             'ano': ano
         }
     })
-
 
 
 @app.route('/configmulta', methods=['GET'])
@@ -1752,8 +1844,6 @@ def listar_multas_por_usuario(id_usuario):
     return jsonify({'multas': multas_formatadas})
 
 
-
-
 #Barra de pesquisa
 @app.route('/pesquisar', methods=['GET'])
 def pesquisar_livros():
@@ -1807,5 +1897,3 @@ def pesquisar_livros():
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
-
-
