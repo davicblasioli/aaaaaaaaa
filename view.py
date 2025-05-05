@@ -2043,7 +2043,7 @@ def adicionar_avaliacao():
 
     # Verifica se o usuário já avaliou esse livro
     cursor.execute("""
-        SELECT id FROM avaliacao WHERE id_usuario = ? AND id_livro = ?
+        SELECT id_avaliacao FROM avaliacao WHERE id_usuario = ? AND id_livro = ?
     """, (id_usuario, id_livro))
     avaliacao_existente = cursor.fetchone()
 
