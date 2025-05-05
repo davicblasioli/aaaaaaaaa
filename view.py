@@ -1713,12 +1713,11 @@ def configmulta_put(id):
 
     # 🔥 Verifica se já existe multa pendente para aquele ano (comparação direta com o ano inteiro)
     cursor.execute('''
-        SELECT 1 
-        FROM EMPRESTIMOS 
-        WHERE ano = ? 
-          AND status_multa = 'pendente'
-        LIMIT 1
-    ''', (ano,))
+        SELECT FIRST 1 1
+        FROM MULTAS
+        WHERE EXTRACT(YEAR FROM DATA_LANCAMENTO) = ?
+          AND STATUS = '1'
+    ''', (int(ano),))
 
     multa_pendente = cursor.fetchone()
 
@@ -1947,6 +1946,17 @@ def adicionar_avaliacao():
     if not cursor.fetchone():
         cursor.close()
         return jsonify({'mensagem': 'Livro não encontrado'}), 404
+
+    # Verifica se o usuário já pegou esse livro emprestado (status 2 ou 3)
+    cursor.execute("""
+        SELECT 1 FROM emprestimos
+        WHERE id_usuario = ? AND id_livro = ? AND status IN (2, 3)
+    """, (id_usuario, id_livro))
+    emprestimo_valido = cursor.fetchone()
+
+    if not emprestimo_valido:
+        cursor.close()
+        return jsonify({'mensagem': 'Você só pode avaliar livros que já foram emprestados por você.'}), 403
 
     # Verifica se o usuário já avaliou esse livro
     cursor.execute("""
