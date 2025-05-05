@@ -1431,7 +1431,7 @@ def emprestimos(id_emprestimo):
 
 
 @app.route('/reservas', methods=['GET'])
-def reservas_get():
+def listar_reservas():
     cur = con.cursor()
     cur.execute('''
         SELECT 
@@ -1449,23 +1449,103 @@ def reservas_get():
         FROM emprestimos e
         JOIN usuarios u ON e.id_usuario = u.id_usuario
         JOIN livros l ON e.id_livro = l.id_livro
+        WHERE e.status = 1
+    ''')
+    reservas = cur.fetchall()
+    reservas_dic = [{
+        'id_emprestimo': r[0],
+        'data_reserva': r[1].strftime('%d-%m-%Y') if r[1] else None,
+        'data_emprestimo': r[2].strftime('%d-%m-%Y') if r[2] else None,
+        'data_devolucao': r[3].strftime('%d-%m-%Y') if r[3] else None,
+        'data_devolvida': r[4].strftime('%d-%m-%Y') if r[4] else None,
+        'status': r[5],
+        'id_usuario': r[6],
+        'id_livro': r[7],
+        'nome_usuario': r[8],
+        'titulo_livro': r[9],
+        'autor_livro': r[10]
+    } for r in reservas]
+
+    return jsonify(reservas=reservas_dic)
+
+
+@app.route('/emprestimos', methods=['GET'])
+def listar_emprestimos():
+    cur = con.cursor()
+    cur.execute('''
+        SELECT 
+            e.id_emprestimo, 
+            e.data_reserva,
+            e.data_emprestimo, 
+            e.data_devolucao, 
+            e.data_devolvida, 
+            e.status,
+            e.id_usuario, 
+            e.id_livro,
+            u.nome AS nome_usuario,
+            l.titulo AS titulo_livro,
+            l.autor AS autor_livro
+        FROM emprestimos e
+        JOIN usuarios u ON e.id_usuario = u.id_usuario
+        JOIN livros l ON e.id_livro = l.id_livro
+        WHERE e.status = 2
     ''')
     emprestimos = cur.fetchall()
     emprestimos_dic = [{
-        'id_emprestimo': emprestimo[0],
-        'data_reserva': emprestimo[1].strftime('%d-%m-%Y') if emprestimo[1] else None,
-        'data_emprestimo': emprestimo[2].strftime('%d-%m-%Y') if emprestimo[2] else None,
-        'data_devolucao': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
-        'data_devolvida': emprestimo[4].strftime('%d-%m-%Y') if emprestimo[4] else None,
-        'status': emprestimo[5],
-        'id_usuario': emprestimo[6],
-        'id_livro': emprestimo[7],
-        'nome_usuario': emprestimo[8],
-        'titulo_livro': emprestimo[9],
-        'autor_livro': emprestimo[10]
-    } for emprestimo in emprestimos]
+        'id_emprestimo': e[0],
+        'data_reserva': e[1].strftime('%d-%m-%Y') if e[1] else None,
+        'data_emprestimo': e[2].strftime('%d-%m-%Y') if e[2] else None,
+        'data_devolucao': e[3].strftime('%d-%m-%Y') if e[3] else None,
+        'data_devolvida': e[4].strftime('%d-%m-%Y') if e[4] else None,
+        'status': e[5],
+        'id_usuario': e[6],
+        'id_livro': e[7],
+        'nome_usuario': e[8],
+        'titulo_livro': e[9],
+        'autor_livro': e[10]
+    } for e in emprestimos]
 
-    return jsonify(emprestimos_cadastrados=emprestimos_dic)
+    return jsonify(emprestimos=emprestimos_dic)
+
+
+@app.route('/devolvidos', methods=['GET'])
+def listar_devolvidos():
+    cur = con.cursor()
+    cur.execute('''
+        SELECT 
+            e.id_emprestimo, 
+            e.data_reserva,
+            e.data_emprestimo, 
+            e.data_devolucao, 
+            e.data_devolvida, 
+            e.status,
+            e.id_usuario, 
+            e.id_livro,
+            u.nome AS nome_usuario,
+            l.titulo AS titulo_livro,
+            l.autor AS autor_livro
+        FROM emprestimos e
+        JOIN usuarios u ON e.id_usuario = u.id_usuario
+        JOIN livros l ON e.id_livro = l.id_livro
+        WHERE e.status = 3
+    ''')
+    devolvidos = cur.fetchall()
+    devolvidos_dic = [{
+        'id_emprestimo': d[0],
+        'data_reserva': d[1].strftime('%d-%m-%Y') if d[1] else None,
+        'data_emprestimo': d[2].strftime('%d-%m-%Y') if d[2] else None,
+        'data_devolucao': d[3].strftime('%d-%m-%Y') if d[3] else None,
+        'data_devolvida': d[4].strftime('%d-%m-%Y') if d[4] else None,
+        'status': d[5],
+        'id_usuario': d[6],
+        'id_livro': d[7],
+        'nome_usuario': d[8],
+        'titulo_livro': d[9],
+        'autor_livro': d[10]
+    } for d in devolvidos]
+
+    return jsonify(devolvidos=devolvidos_dic)
+
 
 
 @app.route('/reservasusuario/<int:id_usuario>', methods=['GET'])
