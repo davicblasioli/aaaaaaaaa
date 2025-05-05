@@ -2078,3 +2078,20 @@ def adicionar_avaliacao():
     }), 201
 
 
+@app.route('/avaliacoes', methods=['GET'])
+def lista_avaliacoes():
+    cur = con.cursor()
+    cur.execute('SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro FROM avaliacao')
+    avaliacao = cur.fetchall()
+    avaliacao_dic = []
+    for avaliacao in avaliacao:
+        avaliacao.append({
+            'id_avaliacao': avaliacao[0],
+            'nota': avaliacao[1],
+            'data_avaliacao': avaliacao[2],
+            'comentario': avaliacao[3],
+            'id_usuario': avaliacao[4],
+            'id_livro': avaliacao[5],
+        })
+    return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
+
