@@ -10,7 +10,10 @@ import os
 import bcrypt
 from datetime import datetime, timedelta
 from io import BytesIO
+from flask_cors import CORS
 
+app = Flask(__name__)
+CORS(app)
 
 class PDFRelatorio(FPDF):
     def header(self):
@@ -143,6 +146,58 @@ def gerar_pix():
 
     except Exception as e:
         return jsonify({"erro": f"Ocorreu um erro interno: {str(e)}"}), 500
+
+@app.route('/pix', methods=['GET'])
+def get_pix():
+    cur = con.cursor()
+    cur.execute('SELECT id_pix, nome, chave_pix, cidade FROM pix')
+    row = cur.fetchone()
+
+    if not row:
+        return jsonify(mensagem='Nenhum Pix configurado.'), 404
+
+    return jsonify({
+        'id_pix': row[0],
+        'nome': row[1],
+        'chave_pix': row[2],
+        'cidade': row[3]
+    })
+
+
+@app.route('/parametrizar_pix', methods=['POST'])
+def parametrizar_pix():
+    dados = request.get_json()
+    nome = dados['nome']
+    chave_pix = dados['chave_pix']
+    cidade = dados['cidade']
+    razao = dados['razao']
+    cnpj = dados['cnpj']
+
+    cur = con.cursor()
+    # Remove qualquer configuração antiga
+    cur.execute('DELETE FROM pix')
+
+    # Insere a nova parametrização
+    cur.execute('''
+        INSERT INTO pix (nome, chave_pix, cidade, razao, cnpj)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (nome, chave_pix, cidade, razao, cnpj))
+
+    con.commit()
+
+    return jsonify({
+        'mensagem': 'Parâmetros de Pix atualizados com sucesso.',
+        'pix': {
+            'id_pix': 1,
+            'nome': nome,
+            'chave_pix': chave_pix,
+            'cidade': cidade,
+            'razao': razao,
+            'cnpj': cnpj
+        }
+    })
+
+
 # FIM DO PIX
 
 
@@ -583,7 +638,7 @@ def login():
 @app.route('/livro/<int:id>', methods=['GET'])
 def livro_buscar(id):
     cur = con.cursor()
-    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria FROM livros WHERE id_livro = ?', (id,))
+    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, nota FROM livros WHERE id_livro = ?', (id,))
     livro = cur.fetchone()
 
     if not livro:
@@ -597,30 +652,58 @@ def livro_buscar(id):
         'ISBN': livro[4],
         'descricao': livro[5],
         'quantidade': livro[6],
-        'categoria': livro[7]
+        'categoria': livro[7],
+        'nota': livro[8]
     }
 
     return jsonify(livro=livro_dic), 200
 
 
+from flask import request, jsonify
+
 @app.route('/livro', methods=['GET'])
 def livro():
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
+
+    primeiro_livro = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
+    ultimo_livro = pagina * quantidade_por_pagina
+
     cur = con.cursor()
-    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM livros')
+    cur.execute(f'''
+        SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA
+        FROM livros
+        ROWS {primeiro_livro} TO {ultimo_livro}
+    ''')
     livros = cur.fetchall()
+
+    cur.execute('SELECT COUNT(*) FROM livros')
+    total_livros = cur.fetchone()[0]
+    total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
+
     livros_dic = []
-    for livros in livros:
+    for l in livros:
         livros_dic.append({
-            'id_livro': livros[0],
-            'titulo': livros[1],
-            'autor': livros[2],
-            'data_publicacao': livros[3],
-            'ISBN': livros[4],
-            'descricao': livros[5],
-            'quantidade': livros[6],
-            'categoria': livros[7]
+            'id_livro': l[0],
+            'titulo': l[1],
+            'autor': l[2],
+            'data_publicacao': l[3],
+            'ISBN': l[4],
+            'descricao': l[5],
+            'quantidade': l[6],
+            'categoria': l[7],
+            'nota': l[8]
         })
-    return jsonify(mensagem='Lista de Livros', livros=livros_dic)
+
+    return jsonify(
+        mensagem='Lista de Livros',
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_livros=total_livros,
+        livros=livros_dic
+    )
+
+
 
 # Rota para criar um novo livro
 @app.route('/livros', methods=['POST'])
@@ -1993,3 +2076,5 @@ def adicionar_avaliacao():
             'data_avaliacao': data_avaliacao.strftime('%d/%m/%Y')
         }
     }), 201
+
+
