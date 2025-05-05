@@ -1676,6 +1676,18 @@ def configmulta():
 
 @app.route('/configmulta/<int:id>', methods=['PUT'])
 def configmulta_put(id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        jwt.decode(token, senha_secreta, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
     cursor = con.cursor()
 
     # Verifica se a configuração de multa existe pelo ID da configuração
