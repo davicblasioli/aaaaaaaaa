@@ -165,22 +165,26 @@ def get_pix():
 
 
 # Define o caminho da pasta onde as logos serão salvas
-UPLOAD_FOLDER = os.path.join(os.getcwd(), "f", "static", "uploads", "logo")
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "static", "uploads", "logo")
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER  # <- Adiciona isso para garantir que seja usado corretamente
+
+# Define o caminho da pasta onde as logos serão salvas
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "static", "uploads", "logo")
+
+# Informa ao Flask o caminho correto
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Cria a pasta se não existir
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+from flask import request, jsonify
+import os
+
+import os
 
 @app.route('/parametrizar_pix', methods=['POST'])
 def parametrizar_pix():
-    dados = request.form
-    nome = dados['nome']
-    chave_pix = dados['chave_pix']
-    cidade = dados['cidade']
-    razao = dados['razao']
-    cnpj = dados['cnpj']
-
     # Verifica se a logo foi enviada
     if 'logo' not in request.files:
         return jsonify({'mensagem': 'Logo não enviada.'}), 400
@@ -190,17 +194,30 @@ def parametrizar_pix():
     if logo.filename == '':
         return jsonify({'mensagem': 'Nenhum arquivo selecionado.'}), 400
 
-    # Salva a logo com o nome original
-    logo_path = os.path.join(app.config['UPLOAD_FOLDER'], logo.filename)
+    # Captura os dados do formulário com segurança
+    dados = request.form
+    nome = dados.get('nome')
+    chave_pix = dados.get('chave_pix')
+    cidade = dados.get('cidade')
+    razao = dados.get('razao')
+    cnpj = dados.get('cnpj')
 
-    # Salva a logo
+    # Verifica se todos os campos obrigatórios foram enviados
+    if not all([nome, chave_pix, cidade, razao, cnpj]):
+        return jsonify({'mensagem': 'Campos obrigatórios ausentes.'}), 400
+
+    # Garante que a subpasta 'logo' exista
+    logo_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'logo')
+    os.makedirs(logo_dir, exist_ok=True)
+
+    # Salva a logo na pasta correta
+    logo_path = os.path.join(logo_dir, logo.filename)
     logo.save(logo_path)
 
+    # Atualiza banco de dados
     cur = con.cursor()
-    # Remove qualquer configuração antiga
-    cur.execute('DELETE FROM pix')
+    cur.execute('DELETE FROM pix')  # Remove configurações antigas
 
-    # Insere a nova parametrização sem a coluna logo
     cur.execute('''
         INSERT INTO pix (nome, chave_pix, cidade, razao, cnpj)
         VALUES (?, ?, ?, ?, ?)
@@ -211,6 +228,7 @@ def parametrizar_pix():
     return jsonify({
         'mensagem': 'Parâmetros de Pix atualizados com sucesso.'
     })
+
 # FIM DO PIX
 
 
