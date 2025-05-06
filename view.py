@@ -164,13 +164,13 @@ def get_pix():
     })
 
 
-# Configurações para upload de arquivos
-UPLOAD_FOLDER = 'f/static/uploads/logo/'  # Caminho onde as logos serão salvas
+# Define o caminho da pasta onde as logos serão salvas
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "f", "static", "uploads", "logo")
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-UPLOAD_FOLDER = 'f/static/uploads/logo/'  # Caminho onde as logos serão salvas
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
+# Cria a pasta se não existir
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
 @app.route('/parametrizar_pix', methods=['POST'])
 def parametrizar_pix():
@@ -211,7 +211,6 @@ def parametrizar_pix():
     return jsonify({
         'mensagem': 'Parâmetros de Pix atualizados com sucesso.'
     })
-
 # FIM DO PIX
 
 
@@ -2226,14 +2225,18 @@ def lista_avaliacoes():
     cur = con.cursor()
     if id_livro:
         cur.execute('''
-            SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro
-            FROM avaliacao
-            WHERE id_livro = ?
+            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
+                   a.id_usuario, a.id_livro, u.nome
+            FROM avaliacao a
+            JOIN usuarios u ON a.id_usuario = u.id_usuario
+            WHERE a.id_livro = ?
         ''', (id_livro,))
     else:
         cur.execute('''
-            SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro
-            FROM avaliacao
+            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
+                   a.id_usuario, a.id_livro, u.nome
+            FROM avaliacao a
+            JOIN usuarios u ON a.id_usuario = u.id_usuario
         ''')
 
     resultados = cur.fetchall()
@@ -2246,6 +2249,7 @@ def lista_avaliacoes():
             'comentario': a[3],
             'id_usuario': a[4],
             'id_livro': a[5],
+            'nome_usuario': a[6]
         })
 
     return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
