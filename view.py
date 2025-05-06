@@ -670,16 +670,17 @@ def login():
     status = usuario[7]
     tentativas_erro = usuario[8]
 
-    # Verifica se o usuário está inativo
     if status == 'Inativo':
         return jsonify({"error": "Você errou seu email ou sua senha 3 vezes, o usuário foi inativado."}), 403
 
-    # Verifica a senha usando o bcrypt
     if bcrypt.check_password_hash(senha_hash, senha):
         # Resetar tentativas de erro no login bem-sucedido
         cursor.execute("UPDATE USUARIOS SET TENTATIVAS_ERRO = 0 WHERE ID_USUARIO = ?", (id_usuario,))
+        # Limpar o código de verificação após login bem-sucedido
+        cursor.execute("UPDATE USUARIOS SET CODIGO = NULL WHERE ID_USUARIO = ?", (id_usuario,))
         con.commit()
         cursor.close()
+
         token = generate_token(id_usuario, email)
         return jsonify({
             "message": "Login realizado com sucesso",
@@ -694,7 +695,6 @@ def login():
             }
         }), 200
 
-    # Se a senha estiver incorreta
     tentativas_erro += 1
     cursor.execute("UPDATE USUARIOS SET TENTATIVAS_ERRO = ? WHERE ID_USUARIO = ?", (tentativas_erro, id_usuario))
     con.commit()
@@ -2349,3 +2349,45 @@ def verificar_codigo():
     cursor.close()
 
     return jsonify({'message': 'Código verificado com sucesso!'}), 200
+
+
+@app.route('/redefinir_senha/<int:id_usuario>', methods=['PUT'])
+def redefinir_senha(id_usuario):
+    data = request.get_json()
+    nova_senha = data.get('nova_senha')
+    confirmar_senha = data.get('confirmar_senha')
+
+    if not nova_senha or not confirmar_senha:
+        return jsonify({"error": "Preencha todos os campos."}), 400
+
+    if nova_senha != confirmar_senha:
+        return jsonify({"error": "A nova senha e a confirmação não coincidem."}), 400
+
+    if not validar_senha(nova_senha):
+        return jsonify({"error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."}), 400
+
+    cursor = con.cursor()
+    cursor.execute("SELECT SENHA, CODIGO FROM USUARIOS WHERE ID_USUARIO = ?", (id_usuario,))
+    usuario = cursor.fetchone()
+
+    if not usuario:
+        cursor.close()
+        return jsonify({"error": "Usuário não encontrado."}), 404
+
+    senha_atual_hash, codigo = usuario
+
+    if codigo != "CERTO":
+        cursor.close()
+        return jsonify({"error": "Código de verificação inválido ou expirado."}), 403
+
+    if bcrypt.check_password_hash(senha_atual_hash, nova_senha):
+        cursor.close()
+        return jsonify({"error": "A nova senha não pode ser igual à senha atual."}), 400
+
+    nova_senha_hash = bcrypt.generate_password_hash(nova_senha).decode('utf-8')
+
+    cursor.execute("UPDATE USUARIOS SET SENHA = ?, CODIGO = NULL WHERE ID_USUARIO = ?", (nova_senha_hash, id_usuario))
+    con.commit()
+    cursor.close()
+
+    return jsonify({"message": "Senha redefinida com sucesso."}), 200
