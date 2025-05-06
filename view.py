@@ -147,10 +147,10 @@ def gerar_pix():
     except Exception as e:
         return jsonify({"erro": f"Ocorreu um erro interno: {str(e)}"}), 500
 
-@app.route('/pix', methods=['GET'])
+@app.route('/parametrizar_pix', methods=['GET'])
 def get_pix():
     cur = con.cursor()
-    cur.execute('SELECT id_pix, nome, chave_pix, cidade FROM pix')
+    cur.execute('SELECT id_pix, nome, chave_pix, cidade, razao, cnpj FROM pix')  # Inclua razao e cnpj
     row = cur.fetchone()
 
     if not row:
@@ -160,7 +160,9 @@ def get_pix():
         'id_pix': row[0],
         'nome': row[1],
         'chave_pix': row[2],
-        'cidade': row[3]
+        'cidade': row[3],
+        'razao': row[4],
+        'cnpj': row[5]
     })
 
 
@@ -2291,49 +2293,59 @@ def lista_avaliacoes():
 
 
 #ESQUECI MINHA SENHA
-@app.route('/recuperar_senha', methods=['PUT'])
-def recuperar_senha():
+import random
+
+@app.route('/validar_email', methods=['POST'])
+def validar_email():
     data = request.get_json()
     email = data.get('email')
-    nova_senha = data.get('nova_senha')
-    confirmar_senha = data.get('confirmar_senha')
 
-    if not email or not nova_senha or not confirmar_senha:
-        return jsonify({'error': 'Todos os campos são obrigatórios.'}), 400
+    if not email:
+        return jsonify({'error': 'O campo de e-mail é obrigatório.'}), 400
 
     cursor = con.cursor()
-    cursor.execute('SELECT ID_USUARIO, SENHA FROM USUARIOS WHERE EMAIL = ?', (email,))
-    usuario_data = cursor.fetchone()
+    cursor.execute('SELECT ID_USUARIO FROM USUARIOS WHERE EMAIL = ?', (email,))
+    usuario = cursor.fetchone()
 
-    if not usuario_data:
+    if not usuario:
         cursor.close()
-        return jsonify({'error': 'Usuário não encontrado.'}), 404
+        return jsonify({'error': 'E-mail não encontrado.'}), 404
 
-    id_usuario, senha_banco = usuario_data
+    # Gera código de 6 dígitos aleatório
+    codigo_verificacao = str(random.randint(100000, 999999))
 
-    if not validar_senha(nova_senha):
-        cursor.close()
-        return jsonify({
-            "error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."
-        }), 400
-
-    if nova_senha != confirmar_senha:
-        cursor.close()
-        return jsonify({'error': 'Nova senha e confirmação não coincidem.'}), 400
-
-    if bcrypt.check_password_hash(senha_banco, nova_senha):
-        cursor.close()
-        return jsonify({'error': 'A nova senha deve ser diferente da senha atual.'}), 400
-
-    nova_senha_hash = bcrypt.generate_password_hash(nova_senha).decode('utf-8')
-
-    cursor.execute('UPDATE USUARIOS SET SENHA = ? WHERE ID_USUARIO = ?', (nova_senha_hash, id_usuario))
+    # Atualiza o campo CODIGO na tabela USUARIOS
+    cursor.execute('UPDATE USUARIOS SET CODIGO = ? WHERE EMAIL = ?', (codigo_verificacao, email))
     con.commit()
     cursor.close()
 
     return jsonify({
-        'message': 'Senha redefinida com sucesso!',
-        'usuario': {
-            'id_usuario': id_usuario
-        }
+        'message': 'Código de verificação gerado com sucesso.',
+        'codigo': codigo_verificacao  # Só mostramos aqui pra teste. Em produção, envie por e-mail.
     }), 200
+
+
+@app.route('/verificar_codigo', methods=['POST'])
+def verificar_codigo():
+    data = request.get_json()
+    codigo_digitado = data.get('codigo')
+
+    if not codigo_digitado:
+        return jsonify({'error': 'O código é obrigatório.'}), 400
+
+    cursor = con.cursor()
+    cursor.execute('SELECT ID_USUARIO FROM USUARIOS WHERE CODIGO = ?', (codigo_digitado,))
+    usuario = cursor.fetchone()
+
+    if not usuario:
+        cursor.close()
+        return jsonify({'error': 'Código incorreto.'}), 401
+
+    id_usuario = usuario[0]
+
+    # Corrigido: 'CERTO' entre aspas simples
+    cursor.execute('UPDATE USUARIOS SET CODIGO = ? WHERE ID_USUARIO = ?', ('CERTO', id_usuario))
+    con.commit()
+    cursor.close()
+
+    return jsonify({'message': 'Código verificado com sucesso!'}), 200
