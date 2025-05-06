@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_file, flash
+from flask import Flask, jsonify, request, send_file, flash, render_template
 from main import app, con
 from flask_bcrypt import Bcrypt, check_password_hash, generate_password_hash
 from fpdf import FPDF
@@ -178,8 +178,6 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # Cria a pasta se não existir
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-from flask import request, jsonify
-import os
 
 import os
 
@@ -227,6 +225,25 @@ def parametrizar_pix():
 
     return jsonify({
         'mensagem': 'Parâmetros de Pix atualizados com sucesso.'
+    })
+
+@app.route('/pix', methods=['GET'])
+def pix_parametrizacao():
+    cur = con.cursor()
+    cur.execute('SELECT id_pix, nome, razao, chave_pix, cidade, cnpj FROM pix')
+    row = cur.fetchone()
+
+    if not row:
+        return jsonify(mensagem='Nenhum Pix configurado.'), 404
+
+    return jsonify({
+        'id_pix':    row[0],
+        'nome':      row[1],
+        'razao':     row[2],
+        'chave_pix': row[3],
+        'cidade':    row[4],
+        'cnpj':      row[5]
+        # NÃO retornamos aqui a logo — ela virá do localStorage
     })
 
 # FIM DO PIX
@@ -2272,3 +2289,51 @@ def lista_avaliacoes():
 
     return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
 
+
+#ESQUECI MINHA SENHA
+@app.route('/recuperar_senha', methods=['PUT'])
+def recuperar_senha():
+    data = request.get_json()
+    email = data.get('email')
+    nova_senha = data.get('nova_senha')
+    confirmar_senha = data.get('confirmar_senha')
+
+    if not email or not nova_senha or not confirmar_senha:
+        return jsonify({'error': 'Todos os campos são obrigatórios.'}), 400
+
+    cursor = con.cursor()
+    cursor.execute('SELECT ID_USUARIO, SENHA FROM USUARIOS WHERE EMAIL = ?', (email,))
+    usuario_data = cursor.fetchone()
+
+    if not usuario_data:
+        cursor.close()
+        return jsonify({'error': 'Usuário não encontrado.'}), 404
+
+    id_usuario, senha_banco = usuario_data
+
+    if not validar_senha(nova_senha):
+        cursor.close()
+        return jsonify({
+            "error": "A senha deve ter pelo menos 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais."
+        }), 400
+
+    if nova_senha != confirmar_senha:
+        cursor.close()
+        return jsonify({'error': 'Nova senha e confirmação não coincidem.'}), 400
+
+    if bcrypt.check_password_hash(senha_banco, nova_senha):
+        cursor.close()
+        return jsonify({'error': 'A nova senha deve ser diferente da senha atual.'}), 400
+
+    nova_senha_hash = bcrypt.generate_password_hash(nova_senha).decode('utf-8')
+
+    cursor.execute('UPDATE USUARIOS SET SENHA = ? WHERE ID_USUARIO = ?', (nova_senha_hash, id_usuario))
+    con.commit()
+    cursor.close()
+
+    return jsonify({
+        'message': 'Senha redefinida com sucesso!',
+        'usuario': {
+            'id_usuario': id_usuario
+        }
+    }), 200
