@@ -164,20 +164,43 @@ def get_pix():
     })
 
 
+# Configurações para upload de arquivos
+UPLOAD_FOLDER = 'f/static/uploads/logo/'  # Caminho onde as logos serão salvas
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+UPLOAD_FOLDER = 'f/static/uploads/logo/'  # Caminho onde as logos serão salvas
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+
 @app.route('/parametrizar_pix', methods=['POST'])
 def parametrizar_pix():
-    dados = request.get_json()
+    dados = request.form
     nome = dados['nome']
     chave_pix = dados['chave_pix']
     cidade = dados['cidade']
     razao = dados['razao']
     cnpj = dados['cnpj']
 
+    # Verifica se a logo foi enviada
+    if 'logo' not in request.files:
+        return jsonify({'mensagem': 'Logo não enviada.'}), 400
+
+    logo = request.files['logo']
+
+    if logo.filename == '':
+        return jsonify({'mensagem': 'Nenhum arquivo selecionado.'}), 400
+
+    # Salva a logo com o nome original
+    logo_path = os.path.join(app.config['UPLOAD_FOLDER'], logo.filename)
+
+    # Salva a logo
+    logo.save(logo_path)
+
     cur = con.cursor()
     # Remove qualquer configuração antiga
     cur.execute('DELETE FROM pix')
 
-    # Insere a nova parametrização
+    # Insere a nova parametrização sem a coluna logo
     cur.execute('''
         INSERT INTO pix (nome, chave_pix, cidade, razao, cnpj)
         VALUES (?, ?, ?, ?, ?)
@@ -186,17 +209,8 @@ def parametrizar_pix():
     con.commit()
 
     return jsonify({
-        'mensagem': 'Parâmetros de Pix atualizados com sucesso.',
-        'pix': {
-            'id_pix': 1,
-            'nome': nome,
-            'chave_pix': chave_pix,
-            'cidade': cidade,
-            'razao': razao,
-            'cnpj': cnpj
-        }
+        'mensagem': 'Parâmetros de Pix atualizados com sucesso.'
     })
-
 
 # FIM DO PIX
 
@@ -273,20 +287,43 @@ def email_emprestimo(email, texto, subject, anexo=None):
 
 @app.route('/usuario', methods=['GET'])
 def usuario():
-    cur = con.cursor()
-    cur.execute('SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios')
-    usuarios = cur.fetchall()
-    usuarios_dic = [{
-        'id_usuario': usuario[0],
-        'nome': usuario[1],
-        'email': usuario[2],
-        'telefone': usuario[3],
-        'data_nascimento': usuario[4],
-        'cargo': usuario[5],
-        'status': usuario[6],
-    } for usuario in usuarios]
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
 
-    return jsonify(usuarios_cadastrados=usuarios_dic)
+    primeiro_usuario = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
+    ultimo_usuario = pagina * quantidade_por_pagina
+
+    cur = con.cursor()
+    cur.execute(f'''
+        SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status
+        FROM usuarios
+        ROWS {primeiro_usuario} TO {ultimo_usuario}
+    ''')
+    usuarios = cur.fetchall()
+
+    cur.execute('SELECT COUNT(*) FROM usuarios')
+    total_usuarios = cur.fetchone()[0]
+    total_paginas = (total_usuarios + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+    usuarios_dic = []
+    for u in usuarios:
+        usuarios_dic.append({
+            'id_usuario': u[0],
+            'nome': u[1],
+            'email': u[2],
+            'telefone': u[3],
+            'data_nascimento': u[4],
+            'cargo': u[5],
+            'status': u[6]
+        })
+
+    return jsonify(
+        mensagem='Lista de Usuarios',
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_usuarios=total_usuarios,
+        usuarios=usuarios_dic
+    )
 
 
 @app.route('/usuarios', methods=['POST'])
@@ -638,7 +675,7 @@ def login():
 @app.route('/livro/<int:id>', methods=['GET'])
 def livro_buscar(id):
     cur = con.cursor()
-    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, nota FROM livros WHERE id_livro = ?', (id,))
+    cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, nota, paginas, idioma, status FROM livros WHERE id_livro = ?', (id,))
     livro = cur.fetchone()
 
     if not livro:
@@ -653,7 +690,10 @@ def livro_buscar(id):
         'descricao': livro[5],
         'quantidade': livro[6],
         'categoria': livro[7],
-        'nota': livro[8]
+        'nota': livro[8],
+        'paginas': livro[9],
+        'idioma': livro[10],
+        'status': livro[11]
     }
 
     return jsonify(livro=livro_dic), 200
@@ -671,13 +711,15 @@ def livro():
 
     cur = con.cursor()
     cur.execute(f'''
-        SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA
+        SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA, PAGINAS, IDIOMA, STATUS
         FROM livros
+        WHERE status = 1
         ROWS {primeiro_livro} TO {ultimo_livro}
     ''')
     livros = cur.fetchall()
 
-    cur.execute('SELECT COUNT(*) FROM livros')
+    # Conta apenas os livros com status diferente de 2
+    cur.execute('SELECT COUNT(*) FROM livros WHERE status != 2')
     total_livros = cur.fetchone()[0]
     total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
 
@@ -692,7 +734,10 @@ def livro():
             'descricao': l[5],
             'quantidade': l[6],
             'categoria': l[7],
-            'nota': l[8]
+            'nota': l[8],
+            'paginas': l[9],
+            'idioma': l[10],
+            'status': l[11]
         })
 
     return jsonify(
@@ -729,6 +774,8 @@ def livro_imagem():
     descricao = request.form.get('descricao')
     quantidade = request.form.get('quantidade')
     categoria = request.form.get('categoria')
+    paginas = request.form.get('paginas')
+    idioma = request.form.get('idioma')
     imagem = request.files.get('imagem')  # Arquivo enviado
 
     cursor = con.cursor()
@@ -739,10 +786,13 @@ def livro_imagem():
         cursor.close()
         return jsonify({"error": "Livro já cadastrado"}), 400
 
+    # Define status como 1 (disponível) por padrão
+    status = 1
+
     # Insere o novo livro e retorna o ID gerado
     cursor.execute(
-        "INSERT INTO livros (TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING ID_livro",
-        (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria)
+        "INSERT INTO livros (TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, PAGINAS, IDIOMA, STATUS) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ID_livro",
+        (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, paginas, idioma, status)
     )
     livro_id = cursor.fetchone()[0]
     con.commit()
@@ -750,8 +800,8 @@ def livro_imagem():
     # Salvar a imagem se for enviada
     imagem_path = None
     if imagem:
-        nome_imagem = f"{livro_id}.jpeg"  # Define o nome fixo com .jpeg
-        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")  # Atualizado para refletir a nova estrutura
+        nome_imagem = f"{livro_id}.jpeg"
+        pasta_destino = os.path.join(app.config['UPLOAD_FOLDER'], "Livros")
         os.makedirs(pasta_destino, exist_ok=True)
         imagem_path = os.path.join(pasta_destino, nome_imagem)
         imagem.save(imagem_path)
@@ -769,9 +819,13 @@ def livro_imagem():
             'descricao': descricao,
             'quantidade': quantidade,
             'categoria': categoria,
+            'paginas': paginas,
+            'idioma': idioma,
+            'status': status,
             'imagem_path': f"/static/uploads/Livros/{livro_id}.jpeg"
         }
     }), 201
+
 
 @app.route('/livros/<int:id>', methods=['PUT'])
 def livro_put(id):
@@ -789,7 +843,7 @@ def livro_put(id):
         return jsonify({'mensagem': 'Token inválido'}), 401
 
     cursor = con.cursor()
-    cursor.execute('SELECT ID_LIVRO, TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA FROM LIVROS WHERE ID_LIVRO = ?', (id,))
+    cursor.execute('SELECT ID_LIVRO, TITULO, AUTOR, DATA_PUBLICACAO, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, PAGINAS, IDIOMA, STATUS FROM LIVROS WHERE ID_LIVRO = ?', (id,))
     livro_data = cursor.fetchone()
 
     if not livro_data:
@@ -803,10 +857,13 @@ def livro_put(id):
     descricao = request.form.get('descricao')
     quantidade = request.form.get('quantidade')
     categoria = request.form.get('categoria')
+    paginas = request.form.get('paginas')
+    idioma = request.form.get('idioma')
+    status = request.form.get('status')
     imagem = request.files.get('imagem')
 
-    cursor.execute('UPDATE LIVROS SET TITULO = ?, AUTOR = ?, DATA_PUBLICACAO = ?, ISBN = ?, DESCRICAO = ?, QUANTIDADE = ?, CATEGORIA = ? WHERE ID_LIVRO = ?',
-                   (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, id))
+    cursor.execute('UPDATE LIVROS SET TITULO = ?, AUTOR = ?, DATA_PUBLICACAO = ?, ISBN = ?, DESCRICAO = ?, QUANTIDADE = ?, CATEGORIA = ?, PAGINAS = ?, IDIOMA = ?, STATUS = ? WHERE ID_LIVRO = ?',
+                   (titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, paginas, idioma, status, id))
 
     con.commit()
     cursor.close()
@@ -827,13 +884,16 @@ def livro_put(id):
             'ISBN': ISBN,
             'descricao': descricao,
             'quantidade': quantidade,
-            'categoria': categoria
+            'categoria': categoria,
+            'paginas': paginas,
+            'idioma': idioma,
+            'status': status
         }
     })
 
 
-@app.route('/livros/<int:id>', methods=['DELETE'])
-def deletar_livro(id):
+@app.route('/livro_indisp/<int:id>', methods=['PUT'])
+def tornar_livro_indisponivel(id):
     token = request.headers.get('Authorization')
     if not token:
         return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
@@ -859,22 +919,23 @@ def deletar_livro(id):
     cursor.execute("SELECT 1 FROM emprestimos WHERE id_livro = ? AND status = 2", (id,))
     if cursor.fetchone():
         cursor.close()
-        return jsonify({'error': 'Não é possível excluir o livro com empréstimos em andamento'}), 400
+        return jsonify({'error': 'Não é possível tornar o livro indisponível com empréstimos em andamento'}), 400
 
     # Verificar se há reservas ativas (por exemplo, status = 1) com esse livro
     cursor.execute("SELECT 1 FROM emprestimos WHERE id_livro = ? AND status = 1", (id,))
     if cursor.fetchone():
         cursor.close()
-        return jsonify({'error': 'Não é possível excluir o livro com reservas ativas'}), 400
+        return jsonify({'error': 'Não é possível tornar o livro indisponível com reservas ativas'}), 400
 
-    # Se passou pelas verificações, pode excluir o livro
-    cursor.execute("DELETE FROM livros WHERE ID_LIVRO = ?", (id,))
+    # Atualizar o status do livro para 2 (indisponível)
+    cursor.execute("UPDATE livros SET status = 2 WHERE ID_LIVRO = ?", (id,))
     con.commit()
     cursor.close()
 
     return jsonify({
-        'message': "Livro excluído com sucesso!",
-        'id_livro': id
+        'message': "Livro marcado como indisponível com sucesso!",
+        'id_livro': id,
+        'novo_status': 2
     })
 
 
@@ -2018,7 +2079,7 @@ def listar_multas_por_usuario(id_usuario):
 
 
 #Barra de pesquisa
-@app.route('/pesquisar', methods=['GET'])
+@app.route('/pesquisar_livro', methods=['GET'])
 def pesquisar_livros():
     try:
         termo = request.args.get('q')
@@ -2160,18 +2221,32 @@ def adicionar_avaliacao():
 
 @app.route('/avaliacoes', methods=['GET'])
 def lista_avaliacoes():
+    id_livro = request.args.get('id_livro')
+
     cur = con.cursor()
-    cur.execute('SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro FROM avaliacao')
-    avaliacao = cur.fetchall()
+    if id_livro:
+        cur.execute('''
+            SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro
+            FROM avaliacao
+            WHERE id_livro = ?
+        ''', (id_livro,))
+    else:
+        cur.execute('''
+            SELECT id_avaliacao, nota, data_avaliacao, comentario, id_usuario, id_livro
+            FROM avaliacao
+        ''')
+
+    resultados = cur.fetchall()
     avaliacao_dic = []
-    for avaliacao in avaliacao:
-        avaliacao.append({
-            'id_avaliacao': avaliacao[0],
-            'nota': avaliacao[1],
-            'data_avaliacao': avaliacao[2],
-            'comentario': avaliacao[3],
-            'id_usuario': avaliacao[4],
-            'id_livro': avaliacao[5],
+    for a in resultados:
+        avaliacao_dic.append({
+            'id_avaliacao': a[0],
+            'nota': a[1],
+            'data_avaliacao': a[2],
+            'comentario': a[3],
+            'id_usuario': a[4],
+            'id_livro': a[5],
         })
+
     return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
 
