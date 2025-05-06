@@ -785,7 +785,6 @@ def livro():
     )
 
 
-
 # Rota para criar um novo livro
 @app.route('/livros', methods=['POST'])
 def livro_imagem():
@@ -1529,8 +1528,14 @@ def emprestimos(id_emprestimo):
 
 @app.route('/reservas', methods=['GET'])
 def listar_reservas():
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
+
+    primeiro_item = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
+    ultimo_item = pagina * quantidade_por_pagina
+
     cur = con.cursor()
-    cur.execute('''
+    cur.execute(f'''
         SELECT 
             e.id_emprestimo, 
             e.data_reserva,
@@ -1547,8 +1552,15 @@ def listar_reservas():
         JOIN usuarios u ON e.id_usuario = u.id_usuario
         JOIN livros l ON e.id_livro = l.id_livro
         WHERE e.status = 1
+        ROWS {primeiro_item} TO {ultimo_item}
     ''')
     reservas = cur.fetchall()
+
+    # Conta o total de reservas com status = 1
+    cur.execute('SELECT COUNT(*) FROM emprestimos WHERE status = 1')
+    total_reservas = cur.fetchone()[0]
+    total_paginas = (total_reservas + quantidade_por_pagina - 1) // quantidade_por_pagina
+
     reservas_dic = [{
         'id_emprestimo': r[0],
         'data_reserva': r[1].strftime('%d-%m-%Y') if r[1] else None,
@@ -1563,13 +1575,25 @@ def listar_reservas():
         'autor_livro': r[10]
     } for r in reservas]
 
-    return jsonify(reservas=reservas_dic)
+    return jsonify(
+        mensagem='Lista de Reservas',
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_reservas=total_reservas,
+        reservas=reservas_dic
+    )
 
 
 @app.route('/emprestimos', methods=['GET'])
 def listar_emprestimos():
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
+
+    primeiro_item = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
+    ultimo_item = pagina * quantidade_por_pagina
+
     cur = con.cursor()
-    cur.execute('''
+    cur.execute(f'''
         SELECT 
             e.id_emprestimo, 
             e.data_reserva,
@@ -1586,8 +1610,15 @@ def listar_emprestimos():
         JOIN usuarios u ON e.id_usuario = u.id_usuario
         JOIN livros l ON e.id_livro = l.id_livro
         WHERE e.status = 2
+        ROWS {primeiro_item} TO {ultimo_item}
     ''')
     emprestimos = cur.fetchall()
+
+    # Conta o total de empréstimos com status = 2
+    cur.execute('SELECT COUNT(*) FROM emprestimos WHERE status = 2')
+    total_emprestimos = cur.fetchone()[0]
+    total_paginas = (total_emprestimos + quantidade_por_pagina - 1) // quantidade_por_pagina
+
     emprestimos_dic = [{
         'id_emprestimo': e[0],
         'data_reserva': e[1].strftime('%d-%m-%Y') if e[1] else None,
@@ -1602,13 +1633,25 @@ def listar_emprestimos():
         'autor_livro': e[10]
     } for e in emprestimos]
 
-    return jsonify(emprestimos=emprestimos_dic)
+    return jsonify(
+        mensagem='Lista de Empréstimos',
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_emprestimos=total_emprestimos,
+        emprestimos=emprestimos_dic
+    )
 
 
 @app.route('/devolvidos', methods=['GET'])
 def listar_devolvidos():
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
+
+    primeiro_item = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
+    ultimo_item = pagina * quantidade_por_pagina
+
     cur = con.cursor()
-    cur.execute('''
+    cur.execute(f'''
         SELECT 
             e.id_emprestimo, 
             e.data_reserva,
@@ -1625,8 +1668,15 @@ def listar_devolvidos():
         JOIN usuarios u ON e.id_usuario = u.id_usuario
         JOIN livros l ON e.id_livro = l.id_livro
         WHERE e.status = 3
+        ROWS {primeiro_item} TO {ultimo_item}
     ''')
     devolvidos = cur.fetchall()
+
+    # Conta o total de devolvidos com status = 3
+    cur.execute('SELECT COUNT(*) FROM emprestimos WHERE status = 3')
+    total_devolvidos = cur.fetchone()[0]
+    total_paginas = (total_devolvidos + quantidade_por_pagina - 1) // quantidade_por_pagina
+
     devolvidos_dic = [{
         'id_emprestimo': d[0],
         'data_reserva': d[1].strftime('%d-%m-%Y') if d[1] else None,
@@ -1641,8 +1691,13 @@ def listar_devolvidos():
         'autor_livro': d[10]
     } for d in devolvidos]
 
-    return jsonify(devolvidos=devolvidos_dic)
-
+    return jsonify(
+        mensagem='Lista de Devolvidos',
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_devolvidos=total_devolvidos,
+        devolvidos=devolvidos_dic
+    )
 
 
 @app.route('/reservasusuario/<int:id_usuario>', methods=['GET'])
