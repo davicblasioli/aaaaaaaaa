@@ -287,22 +287,28 @@ def validar_senha(senha):
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 
-def email_emprestimo(email, texto, subject, anexo=None):
+def email_emprestimo(email, texto, subject, anexo=None, html=False):
+    """
+    Envia um e-mail para o destinatário especificado, com texto (plain ou HTML), assunto e opcionalmente um anexo de imagem.
+    """
     if not email:
-        raise ValueError("Informações de sessão inválidas. Certifique-se de que 'email' está definido.")
+        raise ValueError("O campo 'email' é obrigatório.")
 
     sender = "equipe.asa.literaria@gmail.com"
-    recipients = [email]
     password = "yjfy kwcr nazh sirp"  # Substitua pela sua senha de aplicativo
 
     msg = MIMEMultipart()
     msg['Subject'] = subject
     msg['From'] = sender
-    msg['To'] = ', '.join(recipients)
+    msg['To'] = email
 
-    msg.attach(MIMEText(texto, 'plain'))
+    # Escolhe o tipo de corpo do e-mail
+    if html:
+        msg.attach(MIMEText(texto, 'html'))
+    else:
+        msg.attach(MIMEText(texto, 'plain'))
 
-    # Se houver anexo, anexa a imagem do QR Code
+    # Anexa imagem, se fornecida
     if anexo:
         try:
             with open(anexo, 'rb') as attachment:
@@ -312,34 +318,106 @@ def email_emprestimo(email, texto, subject, anexo=None):
         except Exception as e:
             raise RuntimeError(f"Erro ao anexar o arquivo: {e}")
 
+    # Envia o e-mail
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp_server:
             smtp_server.login(sender, password)
-            smtp_server.sendmail(sender, recipients, msg.as_string())
-            print("Mensagem enviada com sucesso!")
+            smtp_server.sendmail(sender, [email], msg.as_string())
+            print(f"E-mail enviado com sucesso para {email}!")
     except Exception as e:
         raise RuntimeError(f"Erro ao enviar o e-mail: {e}")
 
 
 def atualizar_codigo_envio_email(email, codigo, conexao_db):
-    """Função auxiliar para atualizar código e enviar e-mail automaticamente"""
+    """
+    Atualiza o campo CODIGO do usuário no banco de dados e envia um e-mail HTML estilizado com o novo código.
+    """
     cursor = conexao_db.cursor()
     try:
-        # Atualiza o código no banco
-        cursor.execute('UPDATE USUARIOS SET CODIGO = ? WHERE EMAIL = ?', (codigo, email))
+        # Atualiza o código do usuário
+        cursor.execute(
+            'UPDATE USUARIOS SET CODIGO = ? WHERE EMAIL = ?',
+            (codigo, email)
+        )
         conexao_db.commit()
 
-        # Envia e-mail com o novo código
+        # Corpo do e-mail HTML estilizado
+        html_email = f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    background-color: #f9f9f9;
+                    margin: 0;
+                    padding: 0;
+                }}
+                .container {{
+                    background-color: #fff;
+                    max-width: 500px;
+                    margin: 40px auto;
+                    padding: 30px 40px;
+                    border-radius: 12px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+                    text-align: center;
+                }}
+                .codigo {{
+                    display: inline-block;
+                    background: #e3f2fd;
+                    color: #1565c0;
+                    font-size: 2.2em;
+                    font-weight: bold;
+                    letter-spacing: 4px;
+                    padding: 12px 28px;
+                    border-radius: 8px;
+                    margin: 24px 0 18px 0;
+                    box-shadow: 0 1px 4px rgba(21,101,192,0.08);
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    font-size: 0.95em;
+                    color: #888;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h2>Olá, tudo bem?</h2>
+                <p>
+                    Recebemos uma solicitação para verificação de e-mail.<br>
+                    Seu código de verificação é:
+                </p>
+                <div class="codigo">{codigo}</div>
+                <p>
+                    Digite este código no site para continuar.<br>
+                    Se você não solicitou este código, ignore este e-mail.
+                </p>
+                <div class="footer">
+                    Equipe Asa Literária<br>
+                    <small>Este é um e-mail automático, por favor não responda.</small>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        # Envia o e-mail com HTML
         email_emprestimo(
             email=email,
-            texto=f'Seu código de verificação é: {codigo}',
-            subject='Código de Verificação Atualizado'
+            texto=html_email,
+            subject='Seu Código de Verificação Asa Literária',
+            anexo=None,
+            html=True  # Adicione essa flag na função email_emprestimo para diferenciar HTML de texto puro
         )
 
+        print(f"Código atualizado e e-mail enviado para {email}.")
         return True
+
     except Exception as e:
         conexao_db.rollback()
-        raise RuntimeError(f"Falha na atualização do código: {str(e)}")
+        print(f"Erro ao atualizar o código e enviar e-mail: {e}")
+        raise RuntimeError(f"Falha na atualização do código: {e}")
+
     finally:
         cursor.close()
 
@@ -2503,6 +2581,16 @@ def redefinir_senha(id_usuario):
 
     return jsonify({"message": "Senha redefinida com sucesso."}), 200
 
+@app.route('/buscar_id_por_email')
+def buscar_id_por_email():
+    email = request.args.get('email')
+    cursor = con.cursor()
+    cursor.execute("SELECT ID_USUARIO FROM USUARIOS WHERE EMAIL = ?", (email,))
+    usuario = cursor.fetchone()
+    cursor.close()
+    if not usuario:
+        return jsonify({'error': 'Usuário não encontrado.'}), 404
+    return jsonify({'id_usuario': usuario[0]})
 
 @app.route('/avaliacao/<int:id_avaliacao>', methods=['DELETE'])
 def excluir_avaliacao(id_avaliacao):
