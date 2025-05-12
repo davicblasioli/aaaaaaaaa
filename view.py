@@ -15,6 +15,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+
 class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Arial", 'B', 16)
@@ -1130,52 +1131,94 @@ def relatorio():
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
 
+from flask import send_file
+from datetime import datetime
+from fpdf import FPDF
+
+class PDFRelatorio(FPDF):
+    def header(self):
+        self.set_font("Arial", 'B', 16)
+        self.cell(0, 10, "Relatório de Usuários", ln=True, align='C')
+        self.set_line_width(0.5)
+        self.line(10, self.get_y(), 200, self.get_y())
+        self.ln(8)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}', 0, 0, 'C')
+
+def safe_str(texto):
+    return str(texto).encode('latin-1', 'replace').decode('latin-1')
+
+def format_date(date_str):
+    """Converte AAAA-MM-DD para DD/MM/AAAA, se possível."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return date_str
+
 @app.route('/usuarios_relatorio', methods=['GET'])
 def relatorio_usuarios():
     cursor = con.cursor()
     cursor.execute("SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios")
-    usuairios = cursor.fetchall()
+    usuarios = cursor.fetchall()
     cursor.close()
 
-    def safe_str(texto):
-        return str(texto).encode('latin-1', 'replace').decode('latin-1')
+    # Separar usuários ativos e inativos
+    ativos = [u for u in usuarios if str(u[6]).lower() == 'ativo']
+    inativos = [u for u in usuarios if str(u[6]).lower() != 'ativo']
 
-    pdf = FPDF()
+    pdf = PDFRelatorio()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
-    # Título do relatório
-    pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, safe_str("Relatório de Usuarios"), ln=True, align='C')
-    pdf.ln(5)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())  # Linha abaixo do título
-    pdf.ln(5)
+    col_widths = [15, 40, 50, 30, 25, 20, 20]
+    headers = ["ID", "Nome", "Email", "Telefone", "Nascimento", "Cargo", "Status"]
 
-    # Define a fonte para o conteúdo
-    pdf.set_font("Arial", size=12)
+    def add_usuario_table(titulo, lista_usuarios):
+        pdf.set_font("Arial", 'B', 13)
+        pdf.set_text_color(30, 30, 120)
+        pdf.cell(0, 10, safe_str(titulo), ln=True, align='L')
+        pdf.ln(2)
 
-    # Loop para adicionar cada livro em formato de lista
-    for usuairio in usuairios:
-        pdf.set_font("Arial", style='B', size=12)
-        pdf.cell(0, 10, safe_str(f"Usuario ID: {usuairio[0]}"), ln=True)
+        # Cabeçalho da tabela
+        pdf.set_fill_color(200, 220, 255)
+        pdf.set_text_color(0)
+        pdf.set_font("Arial", 'B', 11)
+        for i, header in enumerate(headers):
+            pdf.cell(col_widths[i], 10, safe_str(header), border=1, align='C', fill=True)
+        pdf.ln()
 
-        pdf.set_font("Arial", size=10)
-        pdf.multi_cell(0, 7, safe_str(f"Nome: {usuairio[1]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Email: {usuairio[2]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Telefone: {usuairio[3]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Data_nascimento: {usuairio[4]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Cargo: {usuairio[5]}"))
-        pdf.multi_cell(0, 7, safe_str(f"Status: {usuairio[6]}"))
+        # Linhas dos usuários
+        pdf.set_font("Arial", '', 10)
+        for usuario in lista_usuarios:
+            data_nascimento = format_date(usuario[4])
+            row = [
+                usuario[0], usuario[1], usuario[2], usuario[3],
+                data_nascimento, usuario[5], usuario[6]
+            ]
+            for i, item in enumerate(row):
+                pdf.cell(col_widths[i], 8, safe_str(str(item)), border=1, align='C')
+            pdf.ln()
+        pdf.ln(6)
 
-        pdf.ln(5)  # Espaço entre os usuairios
+    # Tabela de usuários ativos
+    add_usuario_table("Usuários Ativos", ativos)
 
-    # Contador de usuairios
-    pdf.ln(10)
-    pdf.set_font("Arial", style='B', size=12)
-    pdf.cell(200, 10, safe_str(f"Total de usuairios cadastrados: {len(usuairios)}"), ln=True, align='C')
+    # Tabela de usuários inativos
+    add_usuario_table("Usuários Inativos", inativos)
 
-    # Salva o arquivo PDF
-    pdf_path = "relatorio_usuairios.pdf"
+    # Totalizadores
+    pdf.set_font("Arial", 'B', 12)
+    pdf.set_text_color(40, 60, 120)
+    pdf.cell(0, 10, safe_str(f"Total de usuários ativos: {len(ativos)}"), ln=True, align='L')
+    pdf.cell(0, 10, safe_str(f"Total de usuários inativos: {len(inativos)}"), ln=True, align='L')
+    pdf.cell(0, 10, safe_str(f"Total geral de usuários: {len(usuarios)}"), ln=True, align='L')
+
+    # Gera nome de arquivo único
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pdf_path = f"relatorio_usuarios_{timestamp}.pdf"
     pdf.output(pdf_path)
 
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
