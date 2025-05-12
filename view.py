@@ -321,6 +321,29 @@ def email_emprestimo(email, texto, subject, anexo=None):
         raise RuntimeError(f"Erro ao enviar o e-mail: {e}")
 
 
+def atualizar_codigo_envio_email(email, codigo, conexao_db):
+    """Função auxiliar para atualizar código e enviar e-mail automaticamente"""
+    cursor = conexao_db.cursor()
+    try:
+        # Atualiza o código no banco
+        cursor.execute('UPDATE USUARIOS SET CODIGO = ? WHERE EMAIL = ?', (codigo, email))
+        conexao_db.commit()
+
+        # Envia e-mail com o novo código
+        email_emprestimo(
+            email=email,
+            texto=f'Seu código de verificação é: {codigo}',
+            subject='Código de Verificação Atualizado'
+        )
+
+        return True
+    except Exception as e:
+        conexao_db.rollback()
+        raise RuntimeError(f"Falha na atualização do código: {str(e)}")
+    finally:
+        cursor.close()
+
+
 @app.route('/usuario', methods=['GET'])
 def usuario():
     pagina = int(request.args.get('pagina', 1))
@@ -1701,10 +1724,16 @@ def listar_devolvidos():
 
 
 @app.route('/reservasusuario/<int:id_usuario>', methods=['GET'])
-def reservas_get_usuario(id_usuario=None):
+def reservas_get_usuario(id_usuario):
+    # Parâmetros de paginação
+    pagina = int(request.args.get('pagina', 1))
+    quantidade_por_pagina = 10
+    offset = (pagina - 1) * quantidade_por_pagina
+
     cur = con.cursor()
 
-    sql = '''
+    # Query principal com paginação (usando OFFSET/FETCH para Firebird 3+ ou LIMIT/OFFSET para outros bancos)
+    base_sql = '''
         SELECT 
             e.id_emprestimo, 
             e.data_reserva,
@@ -1720,31 +1749,46 @@ def reservas_get_usuario(id_usuario=None):
         FROM emprestimos e
         JOIN usuarios u ON e.id_usuario = u.id_usuario
         JOIN livros l ON e.id_livro = l.id_livro
+        WHERE e.id_usuario = ?
+        ORDER BY e.id_emprestimo DESC
+        ROWS ? TO ?
     '''
 
-    # Se um id_usuario foi passado na URL, filtra a query
-    if id_usuario is not None:
-        sql += ' WHERE e.id_usuario = ?'
-        cur.execute(sql, (id_usuario,))
-    else:
-        cur.execute(sql)
+    # Calculando os parâmetros ROWS X TO Y (Firebird)
+    primeiro_item = offset + 1
+    ultimo_item = offset + quantidade_por_pagina
 
+    cur.execute(base_sql, (id_usuario, primeiro_item, ultimo_item))
     emprestimos = cur.fetchall()
-    emprestimos_dic = [{
-        'id_emprestimo': emprestimo[0],
-        'data_reserva': emprestimo[1].strftime('%d-%m-%Y') if emprestimo[1] else None,
-        'data_emprestimo': emprestimo[2].strftime('%d-%m-%Y') if emprestimo[2] else None,
-        'data_devolucao': emprestimo[3].strftime('%d-%m-%Y') if emprestimo[3] else None,
-        'data_devolvida': emprestimo[4].strftime('%d-%m-%Y') if emprestimo[4] else None,
-        'status': emprestimo[5],
-        'id_usuario': emprestimo[6],
-        'id_livro': emprestimo[7],
-        'nome_usuario': emprestimo[8],
-        'titulo_livro': emprestimo[9],
-        'autor_livro': emprestimo[10]
-    } for emprestimo in emprestimos]
 
-    return jsonify(emprestimos_cadastrados=emprestimos_dic)
+    # Query para contar total de registros desse usuário
+    sql_count = "SELECT COUNT(*) FROM emprestimos WHERE id_usuario = ?"
+    cur.execute(sql_count, (id_usuario,))
+    total_reservas = cur.fetchone()[0]
+    total_paginas = (total_reservas + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+    # Formatação dos resultados
+    emprestimos_dic = [{
+        'id_emprestimo': e[0],
+        'data_reserva': e[1].strftime('%d-%m-%Y') if e[1] else None,
+        'data_emprestimo': e[2].strftime('%d-%m-%Y') if e[2] else None,
+        'data_devolucao': e[3].strftime('%d-%m-%Y') if e[3] else None,
+        'data_devolvida': e[4].strftime('%d-%m-%Y') if e[4] else None,
+        'status': e[5],
+        'id_usuario': e[6],
+        'id_livro': e[7],
+        'nome_usuario': e[8],
+        'titulo_livro': e[9],
+        'autor_livro': e[10]
+    } for e in emprestimos]
+
+    return jsonify(
+        pagina_atual=pagina,
+        total_paginas=total_paginas,
+        total_reservas=total_reservas,
+        reservas=emprestimos_dic
+    )
+
 
 
 @app.route('/devolucao/<int:id_emprestimo>', methods=['PUT'])
@@ -2176,6 +2220,8 @@ def pesquisar_livros():
         termo = request.args.get('q')
         categoria = request.args.get('categoria')
         data_publicacao = request.args.get('data_publicacao')
+        pagina = int(request.args.get('pagina', 1))
+        quantidade_por_pagina = 10
 
         cursor = con.cursor()
 
@@ -2199,11 +2245,21 @@ def pesquisar_livros():
             query += " AND data_publicacao = ?"
             parametros.append(data_publicacao)
 
+        query += " ORDER BY id_livro"
+
         cursor.execute(query, parametros)
         livros = cursor.fetchall()
         cursor.close()
 
-        if not livros:
+        total_livros = len(livros)
+        total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+        # Paginação manual em Python
+        inicio = (pagina - 1) * quantidade_por_pagina
+        fim = inicio + quantidade_por_pagina
+        livros_pagina = livros[inicio:fim]
+
+        if not livros_pagina:
             return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
 
         livros_formatados = [{
@@ -2213,10 +2269,13 @@ def pesquisar_livros():
             'categoria': l[3],
             'data_publicacao': l[4],
             'quantidade': l[5]
-        } for l in livros]
+        } for l in livros_pagina]
 
         return jsonify({
             'mensagem': 'Resultado da pesquisa',
+            'pagina_atual': pagina,
+            'total_paginas': total_paginas,
+            'total_livros': total_livros,
             'livros': livros_formatados
         })
 
@@ -2350,6 +2409,7 @@ def lista_avaliacoes():
 #ESQUECI MINHA SENHA
 import random
 
+# Modificação da rota /validar_email para usar a nova função
 @app.route('/validar_email', methods=['POST'])
 def validar_email():
     data = request.get_json()
@@ -2361,23 +2421,19 @@ def validar_email():
     cursor = con.cursor()
     cursor.execute('SELECT ID_USUARIO FROM USUARIOS WHERE EMAIL = ?', (email,))
     usuario = cursor.fetchone()
-
-    if not usuario:
-        cursor.close()
-        return jsonify({'error': 'E-mail não encontrado.'}), 404
-
-    # Gera código de 6 dígitos aleatório
-    codigo_verificacao = str(random.randint(100000, 999999))
-
-    # Atualiza o campo CODIGO na tabela USUARIOS
-    cursor.execute('UPDATE USUARIOS SET CODIGO = ? WHERE EMAIL = ?', (codigo_verificacao, email))
-    con.commit()
     cursor.close()
 
-    return jsonify({
-        'message': 'Código de verificação gerado com sucesso.',
-        'codigo': codigo_verificacao  # Só mostramos aqui pra teste. Em produção, envie por e-mail.
-    }), 200
+    if not usuario:
+        return jsonify({'error': 'E-mail não encontrado.'}), 404
+
+    codigo_verificacao = str(random.randint(100000, 999999))
+
+    try:
+        # Usa a função auxiliar para atualização e envio
+        atualizar_codigo_envio_email(email, codigo_verificacao, con)
+        return jsonify({'message': 'Código atualizado e e-mail enviado com sucesso!'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/verificar_codigo', methods=['POST'])
@@ -2446,3 +2502,38 @@ def redefinir_senha(id_usuario):
     cursor.close()
 
     return jsonify({"message": "Senha redefinida com sucesso."}), 200
+
+
+@app.route('/avaliacao/<int:id_avaliacao>', methods=['DELETE'])
+def excluir_avaliacao(id_avaliacao):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        cargo_usuario = payload.get('cargo')  # Supondo que o cargo do usuário esteja no payload
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    # Verifica se o usuário é um administrador
+    if cargo_usuario != 'ADM':
+        return jsonify({'mensagem': 'Você não tem permissão para excluir avaliações.'}), 403
+
+    cursor = con.cursor()
+
+    # Verifica se a avaliação existe
+    cursor.execute("SELECT id_avaliacao FROM avaliacao WHERE id_avaliacao = ?", (id_avaliacao,))
+    avaliacao = cursor.fetchone()
+
+    if not avaliacao:
+        return jsonify({'mensagem': 'Avaliação não encontrada'}), 404
+
+    cursor.execute("DELETE FROM avaliacao WHERE id_avaliacao = ?", (id_avaliacao,))
+    con.commit()
+    cursor.close()
+
+    return jsonify({'mensagem': 'Avaliação excluída com sucesso!'}), 200
