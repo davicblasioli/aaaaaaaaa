@@ -1063,10 +1063,12 @@ def tornar_livro_indisponivel(id):
 
 
 # ROTAS DE ADM
+PDF_PATH = "relatorio_livros.pdf"
+
 from flask import send_file
 from datetime import datetime
 from fpdf import FPDF
-from io import BytesIO
+import os
 
 class PDFRelatorio(FPDF):
     def header(self):
@@ -1087,34 +1089,14 @@ class PDFRelatorio(FPDF):
 def safe_str(texto):
     return str(texto).encode('latin-1', 'replace').decode('latin-1')
 
-
-from flask import send_file
-from datetime import datetime
-from fpdf import FPDF
-
-class PDFRelatorio(FPDF):
-    def header(self):
-        self.set_font("Helvetica", 'B', 18)
-        self.set_text_color(34, 49, 63)
-        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
-        self.set_line_width(0.8)
-        self.set_draw_color(52, 152, 219)
-        self.line(15, self.get_y(), 195, self.get_y())
-        self.ln(8)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Helvetica', 'I', 9)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 10, f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}', 0, 0, 'C')
-
-def safe_str(texto):
-    return str(texto).encode('latin-1', 'replace').decode('latin-1')
-
 @app.route('/livros_relatorio', methods=['GET'])
 def relatorio():
+    pdf_path = "relatorio_livros.pdf"
+    if os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
     cursor = con.cursor()
-    cursor.execute("SELECT id_livro, titulo, autor, data_publicacao, isbn, descricao, quantidade, categoria FROM livros")
+    cursor.execute("SELECT id_livro, titulo, autor, publicacao, isbn, descricao, quantidade, categoria FROM livros")
     livros = cursor.fetchall()
     cursor.close()
 
@@ -1122,20 +1104,13 @@ def relatorio():
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
-    # Cria o PDF com os parâmetros padrão do FPDF
-    pdf = PDFRelatorio(orientation='P', unit='mm', format='A4')
-    pdf.titulo = "Relatório de Livros"  # Define o título aqui
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.add_page()
-
     for livro in livros:
-        # Garante que só as 8 primeiras colunas são usadas, mesmo que venham mais do banco
-        id_livro, titulo, autor, data_publicacao, isbn, descricao, quantidade, categoria = livro[:8]
+        id_livro, titulo, autor, publicacao, isbn, descricao, quantidade, categoria = livro[:8]
         campos = [
             ("ID", id_livro),
             ("Título", titulo),
             ("Autor", autor),
-            ("Publicação", data_publicacao),
+            ("Publicação", publicacao),
             ("ISBN", isbn),
             ("Descrição", descricao),
             ("Quantidade", quantidade),
@@ -1149,28 +1124,24 @@ def relatorio():
         value_w = w - 55
         altura_total = 0
 
-        # Calcular altura necessária para o bloco
         pdf.set_font("Helvetica", 'B', 11)
-        altura_total += 7  # Título do bloco
+        altura_total += 7
 
         pdf.set_font("Helvetica", '', 10)
         for label, valor in campos:
             valor_h = pdf.multi_cell(value_w, 6, safe_str(str(valor)), split_only=True)
             altura_total += max(6, len(valor_h) * 6)
 
-        altura_total += 4  # Espaço extra
+        altura_total += 4
 
-        # Prevenção de corte entre páginas
         if pdf.get_y() + altura_total > pdf.page_break_trigger:
             pdf.add_page()
             y = pdf.get_y()
 
-        # Bloco estilizado
         pdf.set_fill_color(245, 248, 252)
         pdf.set_draw_color(160, 180, 210)
         pdf.rect(x, y, w, altura_total, 'DF')
 
-        # Conteúdo do bloco
         pdf.set_xy(x + 6, y + 4)
         pdf.set_font("Helvetica", 'B', 11)
         pdf.set_text_color(52, 73, 94)
@@ -1186,30 +1157,23 @@ def relatorio():
             pdf.multi_cell(value_w, 6, safe_str(str(valor)))
         pdf.ln(4)
 
-    # Totalizador
     pdf.set_font("Helvetica", 'B', 12)
     pdf.set_text_color(40, 60, 120)
     pdf.cell(0, 10, safe_str(f"Total de livros cadastrados: {len(livros)}"), ln=True, align='C')
 
-    # Gera nome de arquivo único
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = f"relatorio_livros_{timestamp}.pdf"
     pdf.output(pdf_path)
-
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
-
-
 
 from flask import send_file
 from datetime import datetime
 from fpdf import FPDF
-from io import BytesIO
+import os
 
 class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
+        self.cell(0, 14, "Relatório de Usuários", ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
@@ -1225,7 +1189,6 @@ def safe_str(texto):
     return str(texto).encode('latin-1', 'replace').decode('latin-1')
 
 def format_date(date_str):
-    """Converte AAAA-MM-DD para DD/MM/AAAA, se possível."""
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").strftime("%d/%m/%Y")
     except Exception:
@@ -1233,6 +1196,10 @@ def format_date(date_str):
 
 @app.route('/usuarios_relatorio', methods=['GET'])
 def relatorio_usuarios():
+    pdf_path = "relatorio_usuarios.pdf"
+    if os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
     cursor = con.cursor()
     cursor.execute("SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status FROM usuarios")
     usuarios = cursor.fetchall()
@@ -1245,14 +1212,7 @@ def relatorio_usuarios():
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
-    # Cria o PDF com os parâmetros padrão do FPDF
-    pdf = PDFRelatorio(orientation='P', unit='mm', format='A4')
-    pdf.titulo = "Relatório de Usuários"  # Define o título aqui
-    pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.add_page()
-
     def add_usuario_blocos(titulo, lista_usuarios):
-        # Seção do grupo com cor suave
         pdf.set_font("Helvetica", 'B', 13)
         pdf.set_fill_color(220, 232, 246)
         pdf.set_text_color(52, 73, 94)
@@ -1262,6 +1222,7 @@ def relatorio_usuarios():
         for usuario in lista_usuarios:
             id_usuario, nome, email, telefone, data_nascimento, cargo, status = usuario
             campos = [
+                ("ID", id_usuario),
                 ("Nome", nome),
                 ("Email", email),
                 ("Telefone", telefone),
@@ -1277,28 +1238,24 @@ def relatorio_usuarios():
             value_w = w - 55
             altura_total = 0
 
-            # Calcular altura necessária para o bloco
             pdf.set_font("Helvetica", 'B', 11)
-            altura_total += 7  # Título do bloco
+            altura_total += 7
 
             pdf.set_font("Helvetica", '', 10)
             for label, valor in campos:
                 valor_h = pdf.multi_cell(value_w, 6, safe_str(str(valor)), split_only=True)
                 altura_total += max(6, len(valor_h) * 6)
 
-            altura_total += 4  # Espaço extra
+            altura_total += 4
 
-            # Prevenção de corte entre páginas
             if pdf.get_y() + altura_total > pdf.page_break_trigger:
                 pdf.add_page()
                 y = pdf.get_y()
 
-            # Bloco estilizado
             pdf.set_fill_color(245, 248, 252)
             pdf.set_draw_color(160, 180, 210)
             pdf.rect(x, y, w, altura_total, 'DF')
 
-            # Conteúdo do bloco
             pdf.set_xy(x + 6, y + 4)
             pdf.set_font("Helvetica", 'B', 11)
             pdf.set_text_color(52, 73, 94)
@@ -1317,56 +1274,20 @@ def relatorio_usuarios():
     add_usuario_blocos("Usuários Ativos", ativos)
     add_usuario_blocos("Usuários Inativos", inativos)
 
-    # Totalizadores
     pdf.set_font("Helvetica", 'B', 12)
     pdf.set_text_color(40, 60, 120)
     pdf.cell(0, 10, safe_str(f"Total de usuários ativos: {len(ativos)}"), ln=True, align='L')
     pdf.cell(0, 10, safe_str(f"Total de usuários inativos: {len(inativos)}"), ln=True, align='L')
     pdf.cell(0, 10, safe_str(f"Total geral de usuários: {len(usuarios)}"), ln=True, align='L')
 
-    # Gera nome de arquivo único
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    pdf_path = f"relatorio_usuarios_{timestamp}.pdf"
     pdf.output(pdf_path)
-
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
 
-
 from flask import send_file, jsonify
 from datetime import datetime
 from fpdf import FPDF
-from io import BytesIO
-
-class PDFRelatorio(FPDF):
-    def header(self):
-        self.set_font("Helvetica", 'B', 18)
-        self.set_text_color(34, 49, 63)
-        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
-        self.set_line_width(0.8)
-        self.set_draw_color(52, 152, 219)
-        self.line(15, self.get_y(), 195, self.get_y())
-        self.ln(8)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Helvetica', 'I', 9)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 10, f'Gerado em {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}', 0, 0, 'C')
-
-def formatar_data(data):
-    if isinstance(data, datetime):
-        return data.strftime('%d/%m/%Y')
-    try:
-        return datetime.strptime(str(data), '%Y-%m-%d').strftime('%d/%m/%Y')
-    except:
-        return str(data) if data else "-"
-
-
-from flask import send_file, jsonify
-from datetime import datetime
-from fpdf import FPDF
-from io import BytesIO
+import os
 
 class PDFRelatorio(FPDF):
     def header(self):
@@ -1406,6 +1327,10 @@ def calcular_dias(data_inicio, data_fim):
 
 @app.route('/multas_relatorio', methods=['GET'])
 def relatorio_multas():
+    pdf_path = "relatorio_multas.pdf"
+    if os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
     try:
         cursor = con.cursor()
         cursor.execute("""
@@ -1420,12 +1345,11 @@ def relatorio_multas():
     except Exception as e:
         return jsonify({"erro": f"Erro ao buscar dados do banco: {str(e)}"}), 500
 
-    pdf = PDFRelatorio(orientation='P', unit='mm', format='A4')
+    pdf = PDFRelatorio()
     pdf.titulo = "Relatório de Multas"
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
 
-    # Seção de título
     pdf.set_font("Helvetica", 'B', 13)
     pdf.set_fill_color(220, 232, 246)
     pdf.set_text_color(52, 73, 94)
@@ -1436,7 +1360,6 @@ def relatorio_multas():
 
     for multa in multas:
         valor, nome_usuario, data_lancamento, titulo_livro, data_emprestimo, data_devolvida = multa
-
         dias_com_livro = calcular_dias(data_emprestimo, data_devolvida)
 
         campos = [
@@ -1456,28 +1379,24 @@ def relatorio_multas():
         value_w = w - label_w - 10
         altura_total = 0
 
-        # Calcular altura do bloco
         pdf.set_font("Helvetica", 'B', 11)
-        altura_total += 7  # Título
+        altura_total += 7
 
         pdf.set_font("Helvetica", '', 10)
         for label, valor_campo in campos:
             valor_h = pdf.multi_cell(value_w, 6, str(valor_campo), split_only=True)
             altura_total += max(6, len(valor_h) * 6)
 
-        altura_total += 8  # Espaço extra
+        altura_total += 8
 
-        # Prevenção de corte entre páginas
         if pdf.get_y() + altura_total > pdf.page_break_trigger:
             pdf.add_page()
             y = pdf.get_y()
 
-        # Bloco estilizado
         pdf.set_fill_color(245, 248, 252)
         pdf.set_draw_color(160, 180, 210)
         pdf.rect(x, y, w, altura_total, 'DF')
 
-        # Conteúdo do bloco
         pdf.set_xy(x + 6, y + 4)
         pdf.set_font("Helvetica", 'B', 11)
         pdf.set_text_color(52, 73, 94)
@@ -1494,36 +1413,25 @@ def relatorio_multas():
 
         pdf.ln(4)
 
-    # Totalizador
     pdf.set_font("Helvetica", 'B', 12)
     pdf.set_text_color(52, 73, 94)
     pdf.ln(2)
     pdf.cell(0, 10, f"Total de multas: {total_multas}", ln=True, align='C')
 
-    # Gera PDF em memória
-    pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
-    pdf_buffer = BytesIO(pdf_bytes)
-
-    return send_file(
-        pdf_buffer,
-        as_attachment=True,
-        download_name="relatorio_multas.pdf",
-        mimetype='application/pdf'
-    )
-
-
+    pdf.output(pdf_path)
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
 
 from flask import send_file, jsonify
 from datetime import datetime
 from fpdf import FPDF
-from io import BytesIO
+import os
 
 class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
+        self.cell(0, 14, "Relatório de Empréstimos", ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
@@ -1541,7 +1449,7 @@ def formatar_data(data):
     try:
         return datetime.strptime(str(data), '%Y-%m-%d').strftime('%d/%m/%Y')
     except:
-        return str(data) if data else "-"
+        return str(data) if data else ""
 
 def traduzir_status(status):
     return {
@@ -1552,16 +1460,20 @@ def traduzir_status(status):
 
 @app.route('/emprestimos_relatorio', methods=['GET'])
 def relatorio_emprestimos():
+    pdf_path = "relatorio_emprestimos.pdf"
+    if os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
     try:
         cursor = con.cursor()
         cursor.execute("""
-            SELECT
-                e.id_emprestimo,
-                l.titulo,
-                u.nome,
-                u.email,
-                e.status,
-                e.data_emprestimo,
+            SELECT 
+                e.id_emprestimo, 
+                l.titulo, 
+                u.nome, 
+                u.email, 
+                e.status, 
+                e.data_emprestimo, 
                 e.data_devolucao,
                 e.data_devolvida,
                 e.data_reserva
@@ -1578,7 +1490,6 @@ def relatorio_emprestimos():
 
     pdf = PDFRelatorio()
     pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.titulo = "Relatório de Empréstimos"  # Define o título aqui
     pdf.add_page()
 
     grupos = {
@@ -1595,7 +1506,6 @@ def relatorio_emprestimos():
         if not emprestimos_filtrados:
             continue
 
-        # Seção do grupo com cor suave
         pdf.set_font("Helvetica", 'B', 13)
         pdf.set_fill_color(220, 232, 246)
         pdf.set_text_color(52, 73, 94)
@@ -1623,29 +1533,24 @@ def relatorio_emprestimos():
             value_w = w - 55
             altura_total = 0
 
-            # Calcular altura necessária para o bloco
             pdf.set_font("Helvetica", 'B', 11)
-            altura_total += 7  # Título do bloco
+            altura_total += 7
 
             pdf.set_font("Helvetica", '', 10)
             for label, valor in campos:
-                pdf.set_font("Helvetica", '', 10)
-                valor_h = pdf.multi_cell(value_w, 6, valor, split_only=True)
+                valor_h = pdf.multi_cell(value_w, 6, str(valor), split_only=True)
                 altura_total += max(6, len(valor_h) * 6)
 
-            altura_total += 4  # Espaço extra no final
+            altura_total += 4
 
-            # Verifica se cabe na página, senão adiciona página
             if pdf.get_y() + altura_total > pdf.page_break_trigger:
                 pdf.add_page()
                 y = pdf.get_y()
 
-            # Desenhar bloco
             pdf.set_fill_color(245, 248, 252)
             pdf.set_draw_color(160, 180, 210)
             pdf.rect(x, y, w, altura_total, 'DF')
 
-            # Escrever dentro do bloco
             pdf.set_xy(x + 6, y + 4)
             pdf.set_font("Helvetica", 'B', 11)
             pdf.set_text_color(52, 73, 94)
@@ -1658,28 +1563,19 @@ def relatorio_emprestimos():
                 pdf.cell(label_w, 6, f"{label}:", ln=0)
                 pdf.set_font("Helvetica", '', 10)
                 pdf.set_text_color(52, 73, 94)
-                pdf.multi_cell(value_w, 6, valor)
+                pdf.multi_cell(value_w, 6, str(valor))
             pdf.ln(4)
 
-    # Totalizadores
     pdf.set_font("Helvetica", 'B', 12)
     pdf.set_text_color(52, 73, 94)
     pdf.ln(2)
     pdf.cell(0, 10, f"Total Reservados: {total_por_grupo.get(1,0)}", ln=True, align='L')
     pdf.cell(0, 10, f"Total Emprestados: {total_por_grupo.get(2,0)}", ln=True, align='L')
     pdf.cell(0, 10, f"Total Devolvidos: {total_por_grupo.get(3,0)}", ln=True, align='L')
-    pdf.cell(0, 10, f"Total Geral: {sum(total_por_grupo.values())}", ln=True, align='L')
+    pdf.cell(0, 10, f"Total Geral: {len(emprestimos)}", ln=True, align='L')
 
-    # Gera PDF em bytes
-    pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
-    pdf_buffer = BytesIO(pdf_bytes)
-
-    return send_file(
-        pdf_buffer,
-        as_attachment=True,
-        download_name="relatorio_emprestimos.pdf",
-        mimetype='application/pdf'
-    )
+    pdf.output(pdf_path)
+    return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
 
 @app.route('/bibliotecario', methods=['POST'])
@@ -2453,55 +2349,59 @@ def configmulta_put(id):
 
     cursor = con.cursor()
 
-    # Verifica se a configuração de multa existe pelo ID da configuração
-    cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ID_Config = ?', (id,))
+    # Busca a configuração atual e seu ano
+    cursor.execute('SELECT ano FROM CONFIGMULTA WHERE ID_Config = ?', (id,))
     config_data = cursor.fetchone()
-
     if not config_data:
         cursor.close()
         return jsonify({'error': 'Configuração de multa não encontrada'}), 404
 
+    ano_atual = config_data[0]
+
     data = request.get_json()
     valorfixo = data.get('valorfixo')
     acrescimo = data.get('acrescimo')
-    ano = data.get('ano')
+    ano_novo = data.get('ano')
 
-    # Verifica se o novo ano já está em uso por outra configuração
-    cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ano = ? AND ID_Config <> ?', (ano, id))
+    if ano_novo is None:
+        cursor.close()
+        return jsonify({'error': 'Ano é obrigatório'}), 400
+
+    # Não permite se já existe outra configuração para o novo ano (exceto a atual)
+    cursor.execute('SELECT ID_Config FROM CONFIGMULTA WHERE ano = ? AND ID_Config <> ?', (ano_novo, id))
     ano_existente = cursor.fetchone()
-
     if ano_existente:
         cursor.close()
-        return jsonify({'error': 'O ano já está em uso em outra configuração'}), 400
+        return jsonify({'error': f'O ano {ano_novo} já está em uso em outra configuração'}), 400
 
-    # 🔥 Verifica se já existe multa pendente para aquele ano (comparação direta com o ano inteiro)
-    cursor.execute('''
-        SELECT FIRST 1 1
-        FROM MULTAS
-        WHERE EXTRACT(YEAR FROM DATA_LANCAMENTO) = ?
-          AND STATUS = '1'
-    ''', (int(ano),))
-
-    multa_pendente = cursor.fetchone()
-
-    if multa_pendente:
+    # Não permite se já existe multa registrada para o ano atual da configuração
+    cursor.execute('SELECT FIRST 1 1 FROM MULTAS WHERE EXTRACT(YEAR FROM DATA_LANCAMENTO) = ?', (int(ano_atual),))
+    multa_ano_atual = cursor.fetchone()
+    if multa_ano_atual:
         cursor.close()
-        return jsonify({'error': f'Não é possível editar. Já existe multa pendente para o ano {ano}.'}), 400
+        return jsonify({'error': f'Não é possível editar. Já existe multa registrada para o ano atual da configuração ({ano_atual}).'}), 400
+
+    # Não permite se já existe multa registrada para o novo ano informado
+    cursor.execute('SELECT FIRST 1 1 FROM MULTAS WHERE EXTRACT(YEAR FROM DATA_LANCAMENTO) = ?', (int(ano_novo),))
+    multa_ano_novo = cursor.fetchone()
+    if multa_ano_novo:
+        cursor.close()
+        return jsonify({'error': f'Não é possível editar. Já existe multa registrada para o novo ano informado ({ano_novo}).'}), 400
 
     # Atualiza a configuração
     cursor.execute('UPDATE CONFIGMULTA SET valorfixo = ?, acrescimo = ?, ano = ? WHERE ID_Config = ?',
-                   (valorfixo, acrescimo, ano, id))
+                   (valorfixo, acrescimo, ano_novo, id))
 
     con.commit()
     cursor.close()
 
     return jsonify({
         'message': 'Configuração de multa editada com sucesso!',
-        'Configuração de multa': {
+        'configuracao_multa': {
             'id_config': id,
             'valorfixo': valorfixo,
             'acrescimo': acrescimo,
-            'ano': ano
+            'ano': ano_novo
         }
     })
 
@@ -2808,6 +2708,40 @@ def lista_avaliacoes():
         })
 
     return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
+
+@app.route('/avaliacao/<int:id_avaliacao>', methods=['DELETE'])
+def deletar_avaliacao(id_avaliacao):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        cargo = payload.get('cargo')  # Supondo que o cargo do usuário esteja no payload
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    # Verifica se o usuário é um administrador
+    if cargo != 'ADM':
+        return jsonify({'mensagem': 'Acesso negado. Apenas administradores podem deletar avaliações.'}), 403
+
+    cursor = con.cursor()
+
+    # Verifica se a avaliação existe
+    cursor.execute("SELECT 1 FROM avaliacao WHERE id_avaliacao = ?", (id_avaliacao,))
+    if not cursor.fetchone():
+        cursor.close()
+        return jsonify({'mensagem': 'Avaliação não encontrada'}), 404
+
+    # Deleta a avaliação
+    cursor.execute("DELETE FROM avaliacao WHERE id_avaliacao = ?", (id_avaliacao,))
+    con.commit()
+    cursor.close()
+
+    return jsonify({'mensagem': 'Avaliação deletada com sucesso!'}), 200
 
 
 #ESQUECI MINHA SENHA
