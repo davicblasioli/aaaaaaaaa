@@ -2975,3 +2975,57 @@ def livro_buscar_detalhes(id):
         historico=historico
     ), 200
 
+
+@app.route('/historico_emprestimos/<int:id_usuario>', methods=['GET'])
+def historico_emprestimos(id_usuario):
+    """
+    Retorna todos os livros já emprestados por um usuário, com status textual e título do livro.
+    """
+    # Dicionário para mapear status numérico para texto
+    status_map = {
+        1: "Reservado",
+        2: "Emprestado",
+        3: "Devolvido",
+        4: "Cancelado"
+    }
+
+    cursor = con.cursor()
+    # Busca todos os empréstimos do usuário, juntando com o título do livro
+    cursor.execute("""
+        SELECT 
+            e.id_emprestimo,
+            e.id_livro,
+            l.titulo,
+            e.status,
+            e.data_reserva,
+            e.data_emprestimo,
+            e.data_devolucao,
+            e.data_devolvida
+        FROM emprestimos e
+        JOIN livros l ON e.id_livro = l.id_livro
+        WHERE e.id_usuario = ?
+        ORDER BY e.data_reserva DESC
+    """, (id_usuario,))
+    emprestimos = cursor.fetchall()
+    cursor.close()
+
+    if not emprestimos:
+        return jsonify({'mensagem': 'Nenhum empréstimo encontrado para este usuário.'}), 404
+
+    resultado = []
+    for e in emprestimos:
+        resultado.append({
+            'id_emprestimo': e[0],
+            'id_livro': e[1],
+            'titulo_livro': e[2],
+            'status': status_map.get(e[3], 'Desconhecido'),
+            'data_reserva': e[4].strftime('%d-%m-%Y') if e[4] else None,
+            'data_emprestimo': e[5].strftime('%d-%m-%Y') if e[5] else None,
+            'data_devolucao': e[6].strftime('%d-%m-%Y') if e[6] else None,
+            'data_devolvida': e[7].strftime('%d-%m-%Y') if e[7] else None
+        })
+
+    return jsonify({
+        'usuario': id_usuario,
+        'historico': resultado
+    })
