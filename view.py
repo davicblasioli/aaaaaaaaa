@@ -799,10 +799,12 @@ def login():
 @app.route('/livro/<int:id>', methods=['GET'])
 def livro_buscar(id):
     cur = con.cursor()
+    # Busca os dados do livro
     cur.execute('SELECT id_livro, titulo, autor, data_publicacao, ISBN, descricao, quantidade, categoria, nota, paginas, idioma, status FROM livros WHERE id_livro = ?', (id,))
     livro = cur.fetchone()
 
     if not livro:
+        cur.close()
         return jsonify({"error": "Nenhum livro encontrado."}), 404
 
     livro_dic = {
@@ -820,10 +822,52 @@ def livro_buscar(id):
         'status': livro[11]
     }
 
-    return jsonify(livro=livro_dic), 200
+    # Busca todos os usuários que já emprestaram esse livro
+    status_map = {
+        1: "Reservado",
+        2: "Emprestado",
+        3: "Devolvido",
+        4: "Cancelado"
+    }
 
+    cur.execute("""
+        SELECT 
+            e.id_emprestimo,
+            e.id_usuario,
+            u.nome,
+            u.email,
+            e.status,
+            e.data_reserva,
+            e.data_emprestimo,
+            e.data_devolucao,
+            e.data_devolvida
+        FROM emprestimos e
+        JOIN usuarios u ON e.id_usuario = u.id_usuario
+        WHERE e.id_livro = ?
+        ORDER BY e.data_reserva DESC
+    """, (id,))
+    registros = cur.fetchall()
+    cur.close()
 
-from flask import request, jsonify
+    usuarios_emprestimos = []
+    for r in registros:
+        usuarios_emprestimos.append({
+            'id_emprestimo': r[0],
+            'id_usuario': r[1],
+            'nome_usuario': r[2],
+            'email_usuario': r[3],
+            'status': status_map.get(r[4], 'Desconhecido'),
+            'data_reserva': r[5].strftime('%d-%m-%Y') if r[5] else None,
+            'data_emprestimo': r[6].strftime('%d-%m-%Y') if r[6] else None,
+            'data_devolucao': r[7].strftime('%d-%m-%Y') if r[7] else None,
+            'data_devolvida': r[8].strftime('%d-%m-%Y') if r[8] else None
+        })
+
+    return jsonify(
+        livro=livro_dic,
+        usuarios_emprestimos=usuarios_emprestimos
+    ), 200
+
 
 @app.route('/livro', methods=['GET'])
 def livro():
@@ -3029,3 +3073,4 @@ def historico_emprestimos(id_usuario):
         'usuario': id_usuario,
         'historico': resultado
     })
+
