@@ -3074,3 +3074,29 @@ def historico_emprestimos(id_usuario):
         'historico': resultado
     })
 
+
+@app.route('/cancelar_reserva/<int:id_emprestimo>', methods=['PUT'])
+def cancelar_reserva(id_emprestimo):
+    """
+    Cancela uma reserva (altera status para 4) apenas se ela estiver com status = 1 (Reservado).
+    """
+    cursor = con.cursor()
+    # Verifica se a reserva existe e está com status = 1 (Reservado)
+    cursor.execute("SELECT status FROM emprestimos WHERE id_emprestimo = ?", (id_emprestimo,))
+    resultado = cursor.fetchone()
+
+    if not resultado:
+        cursor.close()
+        return jsonify({'erro': 'Reserva não encontrada.'}), 404
+
+    status = resultado[0]
+    if status != 1:
+        cursor.close()
+        return jsonify({'erro': 'Só é possível cancelar reservas com status \"Reservado\".'}), 400
+
+    # Atualiza o status para 4 (Cancelado)
+    cursor.execute("UPDATE emprestimos SET status = 4 WHERE id_emprestimo = ?", (id_emprestimo,))
+    con.commit()
+    cursor.close()
+
+    return jsonify({'mensagem': 'Reserva cancelada com sucesso!'}), 200
