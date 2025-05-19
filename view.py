@@ -735,8 +735,40 @@ def editar_senha(id):
     })
 
 
+from datetime import datetime, timedelta
+
+def cancelar_reservas_expiradas(conexao_db):
+    """
+    Cancela automaticamente todas as reservas (status=1) feitas há 2 dias ou mais.
+    """
+    cursor = conexao_db.cursor()
+    # Calcula a data limite (2 dias atrás)
+    data_limite = (datetime.now() - timedelta(days=3)).date()
+    # Busca reservas feitas até a data limite
+    cursor.execute("""
+        SELECT id_emprestimo 
+        FROM emprestimos 
+        WHERE status = 1 AND data_reserva <= ?
+    """, (data_limite,))
+    reservas_expiradas = cursor.fetchall()
+
+    if reservas_expiradas:
+        ids_para_cancelar = [str(r[0]) for r in reservas_expiradas]
+        # Atualiza o status dessas reservas para 4 (Cancelado)
+        cursor.execute(f"""
+            UPDATE emprestimos 
+            SET status = 4 
+            WHERE id_emprestimo IN ({','.join(['?']*len(ids_para_cancelar))})
+        """, ids_para_cancelar)
+        conexao_db.commit()
+    cursor.close()
+
+
+
 @app.route('/login', methods=['POST'])
 def login():
+    cancelar_reservas_expiradas(con)  # Chama a função automática ao iniciar o login
+
     data = request.get_json()
     email = data.get('email')
     senha = data.get('senha')
@@ -3100,3 +3132,82 @@ def cancelar_reserva(id_emprestimo):
     cursor.close()
 
     return jsonify({'mensagem': 'Reserva cancelada com sucesso!'}), 200
+
+
+@app.route('/pesquisar_livro_avancado', methods=['GET'])
+def pesquisar_livro_avancado():
+    try:
+        # Parâmetros opcionais
+        nota_min = request.args.get('nota_min')
+        nota_max = request.args.get('nota_max')
+        paginas_min = request.args.get('paginas_min')
+        paginas_max = request.args.get('paginas_max')
+        idioma = request.args.get('idioma')
+        pagina = int(request.args.get('pagina', 1))
+        quantidade_por_pagina = 10
+
+        cursor = con.cursor()
+
+        query = """
+            SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade, nota, paginas, idioma
+            FROM livros
+            WHERE 1=1
+        """
+        parametros = []
+
+        # Filtros dinâmicos
+        if nota_min:
+            query += " AND nota >= ?"
+            parametros.append(nota_min)
+        if nota_max:
+            query += " AND nota <= ?"
+            parametros.append(nota_max)
+        if paginas_min:
+            query += " AND paginas >= ?"
+            parametros.append(paginas_min)
+        if paginas_max:
+            query += " AND paginas <= ?"
+            parametros.append(paginas_max)
+        if idioma:
+            query += " AND LOWER(idioma) = ?"
+            parametros.append(idioma.lower())
+
+        query += " ORDER BY id_livro"
+
+        cursor.execute(query, parametros)
+        livros = cursor.fetchall()
+        cursor.close()
+
+        total_livros = len(livros)
+        total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+        # Paginação manual em Python
+        inicio = (pagina - 1) * quantidade_por_pagina
+        fim = inicio + quantidade_por_pagina
+        livros_pagina = livros[inicio:fim]
+
+        if not livros_pagina:
+            return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
+
+        livros_formatados = [{
+            'id_livro': l[0],
+            'titulo': l[1],
+            'autor': l[2],
+            'categoria': l[3],
+            'data_publicacao': l[4],
+            'quantidade': l[5],
+            'nota': l[6],
+            'paginas': l[7],
+            'idioma': l[8]
+        } for l in livros_pagina]
+
+        return jsonify({
+            'mensagem': 'Resultado da pesquisa',
+            'pagina_atual': pagina,
+            'total_paginas': total_paginas,
+            'total_livros': total_livros,
+            'livros': livros_formatados
+        })
+
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
