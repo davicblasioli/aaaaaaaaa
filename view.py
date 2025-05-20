@@ -169,6 +169,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 import os
+from werkzeug.utils import secure_filename
 
 @app.route('/parametrizar_pix', methods=['POST'])
 def parametrizar_pix():
@@ -197,9 +198,16 @@ def parametrizar_pix():
     logo_dir = os.path.join(app.config['UPLOAD_FOLDER'], 'logo')
     os.makedirs(logo_dir, exist_ok=True)
 
-    # Salva a logo na pasta correta
-    logo_path = os.path.join(logo_dir, logo.filename)
+    # Sempre salva como 'logo' + extensão original
+    ext = os.path.splitext(secure_filename(logo.filename))[1]  # Ex: '.png', '.jpg'
+    logo_filename = f'logo{ext}'
+    logo_path = os.path.join(logo_dir, logo_filename)
     logo.save(logo_path)
+
+    # Remove outras logos antigas (de extensões diferentes)
+    for arquivo in os.listdir(logo_dir):
+        if arquivo.startswith('logo') and arquivo != logo_filename:
+            os.remove(os.path.join(logo_dir, arquivo))
 
     # Atualiza banco de dados
     cur = con.cursor()
@@ -901,54 +909,6 @@ def livro_buscar(id):
     ), 200
 
 
-@app.route('/livro', methods=['GET'])
-def livro():
-    pagina = int(request.args.get('pagina', 1))
-    quantidade_por_pagina = 10
-
-    primeiro_livro = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
-    ultimo_livro = pagina * quantidade_por_pagina
-
-    cur = con.cursor()
-    cur.execute(f'''
-        SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA, PAGINAS, IDIOMA, STATUS
-        FROM livros
-        WHERE status = 1
-        ROWS {primeiro_livro} TO {ultimo_livro}
-    ''')
-    livros = cur.fetchall()
-
-    # Conta apenas os livros com status diferente de 2
-    cur.execute('SELECT COUNT(*) FROM livros WHERE status != 2')
-    total_livros = cur.fetchone()[0]
-    total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
-
-    livros_dic = []
-    for l in livros:
-        livros_dic.append({
-            'id_livro': l[0],
-            'titulo': l[1],
-            'autor': l[2],
-            'data_publicacao': l[3],
-            'ISBN': l[4],
-            'descricao': l[5],
-            'quantidade': l[6],
-            'categoria': l[7],
-            'nota': l[8],
-            'paginas': l[9],
-            'idioma': l[10],
-            'status': l[11]
-        })
-
-    return jsonify(
-        mensagem='Lista de Livros',
-        pagina_atual=pagina,
-        total_paginas=total_paginas,
-        total_livros=total_livros,
-        livros=livros_dic
-    )
-
-
 # Rota para criar um novo livro
 @app.route('/livros', methods=['POST'])
 def livro_imagem():
@@ -1172,7 +1132,7 @@ def relatorio():
         return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
 
     cursor = con.cursor()
-    cursor.execute("SELECT id_livro, titulo, autor, publicacao, isbn, descricao, quantidade, categoria FROM livros")
+    cursor.execute("SELECT id_livro, titulo, autor, data_publicacao, isbn, descricao, quantidade, categoria FROM livros")
     livros = cursor.fetchall()
     cursor.close()
 
@@ -1181,12 +1141,11 @@ def relatorio():
     pdf.add_page()
 
     for livro in livros:
-        id_livro, titulo, autor, publicacao, isbn, descricao, quantidade, categoria = livro[:8]
+        id_livro, titulo, autor, data_publicacao, isbn, descricao, quantidade, categoria = livro[:8]
         campos = [
-            ("ID", id_livro),
             ("Título", titulo),
             ("Autor", autor),
-            ("Publicação", publicacao),
+            ("Publicação", data_publicacao),
             ("ISBN", isbn),
             ("Descrição", descricao),
             ("Quantidade", quantidade),
@@ -2597,67 +2556,73 @@ def listar_multas_por_usuario(id_usuario):
 @app.route('/pesquisar_livro', methods=['GET'])
 def pesquisar_livros():
     try:
-        termo = request.args.get('q')
-        categoria = request.args.get('categoria')
-        data_publicacao = request.args.get('data_publicacao')
+        termo = request.args.get('q', '').strip()
         pagina = int(request.args.get('pagina', 1))
         quantidade_por_pagina = 10
 
+        primeiro_livro = (pagina - 1) * quantidade_por_pagina + 1
+        ultimo_livro = pagina * quantidade_por_pagina
+
         cursor = con.cursor()
 
-        query = """
-            SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade 
-            FROM livros 
-            WHERE 1=1
-        """
+        # Monta a query base
+        base_query = '''
+            SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA, PAGINAS, IDIOMA, STATUS
+            FROM livros
+            WHERE status = 1
+        '''
+        count_query = 'SELECT COUNT(*) FROM livros WHERE status = 1'
         parametros = []
 
+        # Adiciona filtro de busca se houver termo
         if termo:
-            query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+            base_query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+            count_query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
             termo_lower = f"%{termo.lower()}%"
-            parametros.extend((termo_lower, termo_lower))
+            parametros.extend([termo_lower, termo_lower])
 
-        if categoria:
-            query += " AND LOWER(categoria) = ?"
-            parametros.append(categoria.lower())
+        # Adiciona paginação
+        base_query += f" ROWS {primeiro_livro} TO {ultimo_livro}"
 
-        if data_publicacao:
-            query += " AND data_publicacao = ?"
-            parametros.append(data_publicacao)
-
-        query += " ORDER BY id_livro"
-
-        cursor.execute(query, parametros)
+        # Busca os livros paginados
+        cursor.execute(base_query, parametros)
         livros = cursor.fetchall()
-        cursor.close()
 
-        total_livros = len(livros)
+        # Conta o total de livros (com ou sem filtro)
+        cursor.execute(count_query, parametros)
+        total_livros = cursor.fetchone()[0]
         total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
 
-        # Paginação manual em Python
-        inicio = (pagina - 1) * quantidade_por_pagina
-        fim = inicio + quantidade_por_pagina
-        livros_pagina = livros[inicio:fim]
+        cursor.close()
 
-        if not livros_pagina:
+        if not livros:
             return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
 
-        livros_formatados = [{
-            'id_livro': l[0],
-            'titulo': l[1],
-            'autor': l[2],
-            'categoria': l[3],
-            'data_publicacao': l[4],
-            'quantidade': l[5]
-        } for l in livros_pagina]
+        # Monta o dicionário dos livros
+        livros_dic = []
+        for l in livros:
+            livros_dic.append({
+                'id_livro': l[0],
+                'titulo': l[1],
+                'autor': l[2],
+                'data_publicacao': l[3],
+                'ISBN': l[4],
+                'descricao': l[5],
+                'quantidade': l[6],
+                'categoria': l[7],
+                'nota': l[8],
+                'paginas': l[9],
+                'idioma': l[10],
+                'status': l[11]
+            })
 
-        return jsonify({
-            'mensagem': 'Resultado da pesquisa',
-            'pagina_atual': pagina,
-            'total_paginas': total_paginas,
-            'total_livros': total_livros,
-            'livros': livros_formatados
-        })
+        return jsonify(
+            mensagem='Resultado da pesquisa',
+            pagina_atual=pagina,
+            total_paginas=total_paginas,
+            total_livros=total_livros,
+            livros=livros_dic
+        )
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
@@ -3211,3 +3176,99 @@ def pesquisar_livro_avancado():
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/pesquisar_usuario', methods=['GET'])
+def pesquisar_usuarios():
+    try:
+        termo = request.args.get('q')
+        pagina = int(request.args.get('pagina', 1))
+        quantidade_por_pagina = 10
+
+        cursor = con.cursor()
+
+        query = """
+            SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status
+            FROM usuarios 
+            WHERE 1=1
+        """
+        parametros = []
+
+        if termo:
+            query += " AND (LOWER(nome) LIKE ? OR LOWER(email) LIKE ? OR telefone LIKE ?)"
+            termo_lower = f"%{termo.lower()}%"
+            parametros.extend((termo_lower, termo_lower, f"%{termo}%"))
+
+        query += " ORDER BY id_usuario"
+
+        cursor.execute(query, parametros)
+        usuarios = cursor.fetchall()
+        cursor.close()
+
+        total_usuarios = len(usuarios)
+        total_paginas = (total_usuarios + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+        inicio = (pagina - 1) * quantidade_por_pagina
+        fim = inicio + quantidade_por_pagina
+        usuarios_pagina = usuarios[inicio:fim]
+
+        if not usuarios_pagina:
+            return jsonify({'mensagem': 'Nenhum usuario encontrado com os filtros fornecidos.'}), 404
+
+        def formatar_data_br(data):
+            if not data:
+                return ""
+            if isinstance(data, str):
+                try:
+                    data = datetime.strptime(data, "%Y-%m-%d")
+                except Exception:
+                    try:
+                        data = datetime.strptime(data, "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        return data
+            return data.strftime("%d/%m/%Y")
+
+        usuarios_formatados = [{
+            'id_usuario': u[0],
+            'nome': u[1],
+            'email': u[2],
+            'telefone': u[3],
+            'data_nascimento': formatar_data_br(u[4]),
+            'cargo': u[5],
+            'status': u[6]
+        } for u in usuarios_pagina]
+
+        return jsonify({
+            'mensagem': 'Resultado da pesquisa',
+            'pagina_atual': pagina,
+            'total_paginas': total_paginas,
+            'total_usuarios': total_usuarios,
+            'usuarios': usuarios_formatados
+        })
+
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/usuarioo/<int:id>', methods=['GET'])
+def get_usuario(id):
+    cur = con.cursor()
+    cur.execute('''
+        SELECT id_usuario, nome, email, telefone, data_nascimento, cargo, status
+        FROM usuarios
+        WHERE id_usuario = ?
+    ''', (id,))
+    u = cur.fetchone()
+    if u is None:
+        return jsonify({'erro': 'Usuário não encontrado'}), 404
+
+    usuario = {
+        'id_usuario': u[0],
+        'nome': u[1],
+        'email': u[2],
+        'telefone': u[3],
+        'data_nascimento': u[4],
+        'cargo': u[5],
+        'status': u[6]
+    }
+    return jsonify(usuario)
