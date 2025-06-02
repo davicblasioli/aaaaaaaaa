@@ -1522,7 +1522,7 @@ def relatorio_emprestimos():
         cursor.close()
     except Exception as e:
         return jsonify({"erro": f"Erro ao buscar dados do banco: {str(e)}"}), 500
-
+#DEVIL MAY CRY
     pdf = PDFRelatorio()
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
@@ -2717,39 +2717,50 @@ def adicionar_avaliacao():
 @app.route('/avaliacoes', methods=['GET'])
 def lista_avaliacoes():
     id_livro = request.args.get('id_livro')
+    pagina = int(request.args.get('pagina', 1))
+    limite = int(request.args.get('limite', 1))  # 10 itens por padrão
+    offset = (pagina - 1) * limite
 
     cur = con.cursor()
-    if id_livro:
-        cur.execute('''
-            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
-                   a.id_usuario, a.id_livro, u.nome
-            FROM avaliacao a
-            JOIN usuarios u ON a.id_usuario = u.id_usuario
-            WHERE a.id_livro = ?
-        ''', (id_livro,))
-    else:
-        cur.execute('''
-            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
-                   a.id_usuario, a.id_livro, u.nome
-            FROM avaliacao a
-            JOIN usuarios u ON a.id_usuario = u.id_usuario
-        ''')
+    query_base = '''
+        SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
+               a.id_usuario, a.id_livro, u.nome
+        FROM avaliacao a
+        JOIN usuarios u ON a.id_usuario = u.id_usuario
+    '''
 
+    params = []
+    if id_livro:
+        query = query_base + ' WHERE a.id_livro = ? '
+        params.append(id_livro)
+        query += f'ROWS {offset + 1} TO {offset + limite}'
+    else:
+        query = query_base + f' ROWS {offset + 1} TO {offset + limite}'
+
+    cur.execute(query, params)
     resultados = cur.fetchall()
+
+    # Verifica se há mais resultados
+    tem_mais = len(resultados) == limite
+
     avaliacao_dic = []
     for a in resultados:
         avaliacao_dic.append({
             'id_avaliacao': a[0],
             'nota': a[1],
-            'data_avaliacao': a[2],
+            'data_avaliacao': a[2].strftime('%Y-%m-%d %H:%M:%S') if a[2] else None,
             'comentario': a[3],
             'id_usuario': a[4],
             'id_livro': a[5],
             'nome_usuario': a[6]
         })
 
-    return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
-
+    return jsonify(
+        mensagem='Lista de Avaliações',
+        configuracoes=avaliacao_dic,
+        tem_mais=tem_mais,
+        pagina_atual=pagina
+    )
 @app.route('/avaliacao/<int:id_avaliacao>', methods=['DELETE'])
 def deletar_avaliacao(id_avaliacao):
     token = request.headers.get('Authorization')
@@ -3102,21 +3113,25 @@ def cancelar_reserva(id_emprestimo):
 @app.route('/pesquisar_livro_avancado', methods=['GET'])
 def pesquisar_livro_avancado():
     try:
-        # Parâmetros opcionais
+        # Parâmetros opcionais de filtro
         nota_min = request.args.get('nota_min')
         nota_max = request.args.get('nota_max')
         paginas_min = request.args.get('paginas_min')
         paginas_max = request.args.get('paginas_max')
         idioma = request.args.get('idioma')
+        categoria = request.args.get('categoria')
+        disponibilidade = request.args.get('disponibilidade')
+        termo = request.args.get('q', '').strip()
         pagina = int(request.args.get('pagina', 1))
         quantidade_por_pagina = 10
 
         cursor = con.cursor()
 
+        # Query base
         query = """
-            SELECT id_livro, titulo, autor, categoria, data_publicacao, quantidade, nota, paginas, idioma
+            SELECT id_livro, titulo, autor, data_publicacao, ISBN, DESCRICAO, QUANTIDADE, CATEGORIA, NOTA, PAGINAS, IDIOMA, STATUS
             FROM livros
-            WHERE 1=1
+            WHERE status = 1
         """
         parametros = []
 
@@ -3136,35 +3151,87 @@ def pesquisar_livro_avancado():
         if idioma:
             query += " AND LOWER(idioma) = ?"
             parametros.append(idioma.lower())
+        if categoria:
+            query += " AND categoria = ?"
+            parametros.append(categoria)
+        if disponibilidade == 'disponivel':
+            query += " AND quantidade > 0"
+        elif disponibilidade == 'indisponivel':
+            query += " AND quantidade <= 0"
+        # Busca por título ou autor (parcial, case-insensitive)
+        if termo:
+            query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+            termo_lower = f"%{termo.lower()}%"
+            parametros.extend([termo_lower, termo_lower])
 
+        # Ordenação
         query += " ORDER BY id_livro"
 
+        # Paginação SQL (ajuste conforme seu banco: exemplo para Firebird/Interbase)
+        primeiro_livro = (pagina - 1) * quantidade_por_pagina + 1
+        ultimo_livro = pagina * quantidade_por_pagina
+        query += f" ROWS {primeiro_livro} TO {ultimo_livro}"
+
+        # Executa busca paginada
         cursor.execute(query, parametros)
         livros = cursor.fetchall()
-        cursor.close()
 
-        total_livros = len(livros)
+        # Query para contar total de livros com os mesmos filtros
+        count_query = "SELECT COUNT(*) FROM livros WHERE status = 1"
+        count_parametros = []
+        # Repete os mesmos filtros para a contagem
+        if nota_min:
+            count_query += " AND nota >= ?"
+            count_parametros.append(nota_min)
+        if nota_max:
+            count_query += " AND nota <= ?"
+            count_parametros.append(nota_max)
+        if paginas_min:
+            count_query += " AND paginas >= ?"
+            count_parametros.append(paginas_min)
+        if paginas_max:
+            count_query += " AND paginas <= ?"
+            count_parametros.append(paginas_max)
+        if idioma:
+            count_query += " AND LOWER(idioma) = ?"
+            count_parametros.append(idioma.lower())
+        if categoria:
+            count_query += " AND categoria = ?"
+            count_parametros.append(categoria)
+        if disponibilidade == 'disponivel':
+            count_query += " AND quantidade > 0"
+        elif disponibilidade == 'indisponivel':
+            count_query += " AND quantidade <= 0"
+        if termo:
+            count_query += " AND (LOWER(titulo) LIKE ? OR LOWER(autor) LIKE ?)"
+            count_parametros.extend([termo_lower, termo_lower])
+
+        cursor.execute(count_query, count_parametros)
+        total_livros = cursor.fetchone()[0]
         total_paginas = (total_livros + quantidade_por_pagina - 1) // quantidade_por_pagina
 
-        # Paginação manual em Python
-        inicio = (pagina - 1) * quantidade_por_pagina
-        fim = inicio + quantidade_por_pagina
-        livros_pagina = livros[inicio:fim]
+        cursor.close()
 
-        if not livros_pagina:
+        if not livros:
             return jsonify({'mensagem': 'Nenhum livro encontrado com os filtros fornecidos.'}), 404
 
-        livros_formatados = [{
-            'id_livro': l[0],
-            'titulo': l[1],
-            'autor': l[2],
-            'categoria': l[3],
-            'data_publicacao': l[4],
-            'quantidade': l[5],
-            'nota': l[6],
-            'paginas': l[7],
-            'idioma': l[8]
-        } for l in livros_pagina]
+        # Formata os resultados
+        livros_formatados = []
+        for l in livros:
+            livros_formatados.append({
+                'id_livro': l[0],
+                'titulo': l[1],
+                'autor': l[2],
+                'data_publicacao': l[3],
+                'ISBN': l[4],
+                'descricao': l[5],
+                'quantidade': l[6],
+                'categoria': l[7],
+                'nota': l[8],
+                'paginas': l[9],
+                'idioma': l[10],
+                'status': l[11]
+            })
 
         return jsonify({
             'mensagem': 'Resultado da pesquisa',
@@ -3176,6 +3243,55 @@ def pesquisar_livro_avancado():
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/livros_todos', methods=['GET'])
+def livros_todos():
+    try:
+        cursor = con.cursor()
+        cursor.execute("""
+            SELECT 
+                id_livro, 
+                titulo, 
+                autor, 
+                categoria, 
+                nota, 
+                paginas, 
+                quantidade, 
+                idioma
+            FROM livros
+        """)
+        colunas = [desc[0] for desc in cursor.description]
+        livros = [dict(zip(colunas, row)) for row in cursor.fetchall()]
+        cursor.close()
+        return jsonify({"livros": livros})
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/todas_categorias', methods=['GET'])
+def todas_categorias():
+    try:
+        cursor = con.cursor()
+        cursor.execute("SELECT DISTINCT categoria FROM livros WHERE categoria IS NOT NULL AND categoria != ''")
+        categorias = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return jsonify({"categorias": categorias})
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/todos_idiomas', methods=['GET'])
+def todos_idiomas():
+    try:
+        cursor = con.cursor()
+        cursor.execute("SELECT DISTINCT idioma FROM livros WHERE idioma IS NOT NULL AND idioma != ''")
+        idiomas = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        return jsonify({"idiomas": idiomas})
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
 
 
 @app.route('/pesquisar_usuario', methods=['GET'])
