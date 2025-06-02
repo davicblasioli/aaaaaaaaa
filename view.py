@@ -772,7 +772,6 @@ def cancelar_reservas_expiradas(conexao_db):
     cursor.close()
 
 
-
 @app.route('/login', methods=['POST'])
 def login():
     cancelar_reservas_expiradas(con)  # Chama a função automática ao iniciar o login
@@ -1110,11 +1109,12 @@ class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, "Relatório de Livros", ln=True, align='C')
+        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
         self.ln(8)
+
 
     def footer(self):
         self.set_y(-15)
@@ -1137,8 +1137,9 @@ def relatorio():
     cursor.close()
 
     pdf = PDFRelatorio()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.titulo = "Relatório de Livros"
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=18)
 
     for livro in livros:
         id_livro, titulo, autor, data_publicacao, isbn, descricao, quantidade, categoria = livro[:8]
@@ -1208,11 +1209,12 @@ class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, "Relatório de Usuários", ln=True, align='C')
+        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
         self.ln(8)
+
 
     def footer(self):
         self.set_y(-15)
@@ -1244,8 +1246,9 @@ def relatorio_usuarios():
     inativos = [u for u in usuarios if str(u[6]).lower() != 'ativo']
 
     pdf = PDFRelatorio()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.titulo = "Relatório de Usuários"
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=18)
 
     def add_usuario_blocos(titulo, lista_usuarios):
         pdf.set_font("Helvetica", 'B', 13)
@@ -1257,7 +1260,6 @@ def relatorio_usuarios():
         for usuario in lista_usuarios:
             id_usuario, nome, email, telefone, data_nascimento, cargo, status = usuario
             campos = [
-                ("ID", id_usuario),
                 ("Nome", nome),
                 ("Email", email),
                 ("Telefone", telefone),
@@ -1328,7 +1330,7 @@ class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, getattr(self, 'titulo', 'Relatório de Multas'), ln=True, align='C')
+        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
@@ -1382,8 +1384,8 @@ def relatorio_multas():
 
     pdf = PDFRelatorio()
     pdf.titulo = "Relatório de Multas"
-    pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=18)
 
     pdf.set_font("Helvetica", 'B', 13)
     pdf.set_fill_color(220, 232, 246)
@@ -1466,11 +1468,12 @@ class PDFRelatorio(FPDF):
     def header(self):
         self.set_font("Helvetica", 'B', 18)
         self.set_text_color(34, 49, 63)
-        self.cell(0, 14, "Relatório de Empréstimos", ln=True, align='C')
+        self.cell(0, 14, getattr(self, 'titulo', 'Relatório'), ln=True, align='C')
         self.set_line_width(0.8)
         self.set_draw_color(52, 152, 219)
         self.line(15, self.get_y(), 195, self.get_y())
         self.ln(8)
+
 
     def footer(self):
         self.set_y(-15)
@@ -1524,8 +1527,9 @@ def relatorio_emprestimos():
         return jsonify({"erro": f"Erro ao buscar dados do banco: {str(e)}"}), 500
 #DEVIL MAY CRY
     pdf = PDFRelatorio()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.titulo = "Relatório de Empréstimos"
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=18)
 
     grupos = {
         1: "Livros Reservados",
@@ -2717,50 +2721,39 @@ def adicionar_avaliacao():
 @app.route('/avaliacoes', methods=['GET'])
 def lista_avaliacoes():
     id_livro = request.args.get('id_livro')
-    pagina = int(request.args.get('pagina', 1))
-    limite = int(request.args.get('limite', 1))  # 10 itens por padrão
-    offset = (pagina - 1) * limite
 
     cur = con.cursor()
-    query_base = '''
-        SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
-               a.id_usuario, a.id_livro, u.nome
-        FROM avaliacao a
-        JOIN usuarios u ON a.id_usuario = u.id_usuario
-    '''
-
-    params = []
     if id_livro:
-        query = query_base + ' WHERE a.id_livro = ? '
-        params.append(id_livro)
-        query += f'ROWS {offset + 1} TO {offset + limite}'
+        cur.execute('''
+            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
+                   a.id_usuario, a.id_livro, u.nome
+            FROM avaliacao a
+            JOIN usuarios u ON a.id_usuario = u.id_usuario
+            WHERE a.id_livro = ?
+        ''', (id_livro,))
     else:
-        query = query_base + f' ROWS {offset + 1} TO {offset + limite}'
+        cur.execute('''
+            SELECT a.id_avaliacao, a.nota, a.data_avaliacao, a.comentario,
+                   a.id_usuario, a.id_livro, u.nome
+            FROM avaliacao a
+            JOIN usuarios u ON a.id_usuario = u.id_usuario
+        ''')
 
-    cur.execute(query, params)
     resultados = cur.fetchall()
-
-    # Verifica se há mais resultados
-    tem_mais = len(resultados) == limite
-
     avaliacao_dic = []
     for a in resultados:
         avaliacao_dic.append({
             'id_avaliacao': a[0],
             'nota': a[1],
-            'data_avaliacao': a[2].strftime('%Y-%m-%d %H:%M:%S') if a[2] else None,
+            'data_avaliacao': a[2],
             'comentario': a[3],
             'id_usuario': a[4],
             'id_livro': a[5],
             'nome_usuario': a[6]
         })
 
-    return jsonify(
-        mensagem='Lista de Avaliações',
-        configuracoes=avaliacao_dic,
-        tem_mais=tem_mais,
-        pagina_atual=pagina
-    )
+    return jsonify(mensagem='Lista de Avaliações', configuracoes=avaliacao_dic)
+
 @app.route('/avaliacao/<int:id_avaliacao>', methods=['DELETE'])
 def deletar_avaliacao(id_avaliacao):
     token = request.headers.get('Authorization')
@@ -2770,16 +2763,14 @@ def deletar_avaliacao(id_avaliacao):
     token = remover_bearer(token)
     try:
         payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
-        cargo = payload.get('cargo')  # Supondo que o cargo do usuário esteja no payload
+        print(">> PAYLOAD RECEBIDO:", payload)  # <<< Adicione este print
+        cargo = payload.get('cargo')
     except jwt.ExpiredSignatureError:
         return jsonify({'mensagem': 'Token expirado'}), 401
     except jwt.InvalidTokenError:
         return jsonify({'mensagem': 'Token inválido'}), 401
 
-    # Verifica se o usuário é um administrador
-    if cargo != 'ADM':
-        return jsonify({'mensagem': 'Acesso negado. Apenas administradores podem deletar avaliações.'}), 403
-
+    # ... resto do código ai vc completa ai ...
     cursor = con.cursor()
 
     # Verifica se a avaliação existe
