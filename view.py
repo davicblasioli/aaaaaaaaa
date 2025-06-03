@@ -1097,6 +1097,41 @@ def tornar_livro_indisponivel(id):
     })
 
 
+@app.route('/livro_disp/<int:id>', methods=['PUT'])
+def tornar_livro_disponivel(id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'mensagem': 'Token de autenticação necessário'}), 401
+
+    token = remover_bearer(token)
+    try:
+        payload = jwt.decode(token, senha_secreta, algorithms=['HS256'])
+        id_usuario = payload['id_usuario']
+    except jwt.ExpiredSignatureError:
+        return jsonify({'mensagem': 'Token expirado'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'mensagem': 'Token inválido'}), 401
+
+    cursor = con.cursor()
+
+    # Verificar se o livro existe
+    cursor.execute("SELECT 1 FROM livros WHERE ID_LIVRO = ?", (id,))
+    if not cursor.fetchone():
+        cursor.close()
+        return jsonify({"error": "Livro não encontrado"}), 404
+
+    # Atualizar o status do livro para 1 (disponível)
+    cursor.execute("UPDATE livros SET status = 1 WHERE ID_LIVRO = ?", (id,))
+    con.commit()
+    cursor.close()
+
+    return jsonify({
+        'message': "Livro marcado como disponível com sucesso!",
+        'id_livro': id,
+        'novo_status': 1
+    })
+
+
 # ROTAS DE ADM
 PDF_PATH = "relatorio_livros.pdf"
 
@@ -1890,118 +1925,183 @@ def emprestimos(id_emprestimo):
 
 @app.route('/reservas', methods=['GET'])
 def listar_reservas():
-    pagina = int(request.args.get('pagina', 1))
-    quantidade_por_pagina = 10
+    try:
+        termo = request.args.get('q')
+        pagina = int(request.args.get('pagina', 1))
+        quantidade_por_pagina = 10
 
-    primeiro_item = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
-    ultimo_item = pagina * quantidade_por_pagina
+        cur = con.cursor()
 
-    cur = con.cursor()
-    cur.execute(f'''
-        SELECT 
-            e.id_emprestimo, 
-            e.data_reserva,
-            e.data_emprestimo, 
-            e.data_devolucao, 
-            e.data_devolvida, 
-            e.status,
-            e.id_usuario, 
-            e.id_livro,
-            u.nome AS nome_usuario,
-            l.titulo AS titulo_livro,
-            l.autor AS autor_livro
-        FROM emprestimos e
-        JOIN usuarios u ON e.id_usuario = u.id_usuario
-        JOIN livros l ON e.id_livro = l.id_livro
-        WHERE e.status = 1
-        ROWS {primeiro_item} TO {ultimo_item}
-    ''')
-    reservas = cur.fetchall()
+        # Query base
+        sql = """
+            SELECT 
+                e.id_emprestimo, 
+                e.data_reserva,
+                e.status,
+                e.id_usuario, 
+                e.id_livro,
+                u.nome AS nome_usuario,
+                l.titulo AS titulo_livro,
+                l.autor AS autor_livro
+            FROM emprestimos e
+            JOIN usuarios u ON e.id_usuario = u.id_usuario
+            JOIN livros l ON e.id_livro = l.id_livro
+            WHERE e.status = 1
+        """
+        params = []
 
-    # Conta o total de reservas com status = 1
-    cur.execute('SELECT COUNT(*) FROM emprestimos WHERE status = 1')
-    total_reservas = cur.fetchone()[0]
-    total_paginas = (total_reservas + quantidade_por_pagina - 1) // quantidade_por_pagina
+        # Filtro de busca
+        if termo:
+            sql += " AND (LOWER(u.nome) LIKE ? OR LOWER(l.titulo) LIKE ?)"
+            termo_lower = f"%{termo.lower()}%"
+            params.extend([termo_lower, termo_lower])
 
-    reservas_dic = [{
-        'id_emprestimo': r[0],
-        'data_reserva': r[1].strftime('%d-%m-%Y') if r[1] else None,
-        'data_emprestimo': r[2].strftime('%d-%m-%Y') if r[2] else None,
-        'data_devolucao': r[3].strftime('%d-%m-%Y') if r[3] else None,
-        'data_devolvida': r[4].strftime('%d-%m-%Y') if r[4] else None,
-        'status': r[5],
-        'id_usuario': r[6],
-        'id_livro': r[7],
-        'nome_usuario': r[8],
-        'titulo_livro': r[9],
-        'autor_livro': r[10]
-    } for r in reservas]
+        sql += " ORDER BY e.data_reserva DESC"
 
-    return jsonify(
-        mensagem='Lista de Reservas',
-        pagina_atual=pagina,
-        total_paginas=total_paginas,
-        total_reservas=total_reservas,
-        reservas=reservas_dic
-    )
+        cur.execute(sql, params)
+        reservas = cur.fetchall()
+
+        # Paginação em memória
+        total_reservas = len(reservas)
+        total_paginas = (total_reservas + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+        inicio = (pagina - 1) * quantidade_por_pagina
+        fim = inicio + quantidade_por_pagina
+        reservas_pagina = reservas[inicio:fim]
+
+        if not reservas_pagina:
+            return jsonify({'mensagem': 'Nenhuma reserva encontrada'}), 404
+
+        # Formatação de datas
+        def formatar_data_br(data):
+            if data is None:
+                return ""
+            if isinstance(data, (datetime, date)):
+                return data.strftime("%d/%m/%Y")
+            if isinstance(data, str):
+                try:
+                    data_obj = datetime.strptime(data, "%Y-%m-%d %H:%M:%S")
+                    return data_obj.strftime("%d/%m/%Y")
+                except ValueError:
+                    try:
+                        data_obj = datetime.strptime(data, "%Y-%m-%d")
+                        return data_obj.strftime("%d/%m/%Y")
+                    except Exception:
+                        return data
+            return str(data)
+
+        reservas_formatadas = [{
+            'id_emprestimo': r[0],
+            'data_reserva': formatar_data_br(r[1]),
+            'status': r[2],
+            'id_usuario': r[3],
+            'id_livro': r[4],
+            'nome_usuario': r[5],
+            'titulo_livro': r[6],
+            'autor_livro': r[7]
+        } for r in reservas_pagina]
+
+        return jsonify({
+            'mensagem': 'Lista de Reservas',
+            'pagina_atual': pagina,
+            'total_paginas': total_paginas,
+            'total_reservas': total_reservas,
+            'reservas': reservas_formatadas
+        })
+
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
 
 
 @app.route('/emprestimos', methods=['GET'])
 def listar_emprestimos():
-    pagina = int(request.args.get('pagina', 1))
-    quantidade_por_pagina = 10
+    try:
+        termo = request.args.get('q')
+        pagina = int(request.args.get('pagina', 1))
+        quantidade_por_pagina = 10
 
-    primeiro_item = (pagina * quantidade_por_pagina) - quantidade_por_pagina + 1
-    ultimo_item = pagina * quantidade_por_pagina
+        cur = con.cursor()
 
-    cur = con.cursor()
-    cur.execute(f'''
-        SELECT 
-            e.id_emprestimo, 
-            e.data_reserva,
-            e.data_emprestimo, 
-            e.data_devolucao, 
-            e.data_devolvida, 
-            e.status,
-            e.id_usuario, 
-            e.id_livro,
-            u.nome AS nome_usuario,
-            l.titulo AS titulo_livro,
-            l.autor AS autor_livro
-        FROM emprestimos e
-        JOIN usuarios u ON e.id_usuario = u.id_usuario
-        JOIN livros l ON e.id_livro = l.id_livro
-        WHERE e.status = 2
-        ROWS {primeiro_item} TO {ultimo_item}
-    ''')
-    emprestimos = cur.fetchall()
+        sql = """
+            SELECT 
+                e.id_emprestimo, 
+                e.data_reserva,
+                e.data_emprestimo, 
+                e.data_devolucao, 
+                e.status,
+                e.id_usuario, 
+                e.id_livro,
+                u.nome AS nome_usuario,
+                l.titulo AS titulo_livro,
+                l.autor AS autor_livro
+            FROM emprestimos e
+            JOIN usuarios u ON e.id_usuario = u.id_usuario
+            JOIN livros l ON e.id_livro = l.id_livro
+            WHERE e.status = 2
+        """
+        params = []
 
-    # Conta o total de empréstimos com status = 2
-    cur.execute('SELECT COUNT(*) FROM emprestimos WHERE status = 2')
-    total_emprestimos = cur.fetchone()[0]
-    total_paginas = (total_emprestimos + quantidade_por_pagina - 1) // quantidade_por_pagina
+        if termo:
+            sql += " AND (LOWER(u.nome) LIKE ? OR LOWER(l.titulo) LIKE ?)"
+            termo_lower = f"%{termo.lower()}%"
+            params.extend([termo_lower, termo_lower])
 
-    emprestimos_dic = [{
-        'id_emprestimo': e[0],
-        'data_reserva': e[1].strftime('%d-%m-%Y') if e[1] else None,
-        'data_emprestimo': e[2].strftime('%d-%m-%Y') if e[2] else None,
-        'data_devolucao': e[3].strftime('%d-%m-%Y') if e[3] else None,
-        'data_devolvida': e[4].strftime('%d-%m-%Y') if e[4] else None,
-        'status': e[5],
-        'id_usuario': e[6],
-        'id_livro': e[7],
-        'nome_usuario': e[8],
-        'titulo_livro': e[9],
-        'autor_livro': e[10]
-    } for e in emprestimos]
+        sql += " ORDER BY e.data_emprestimo DESC"
 
-    return jsonify(
-        mensagem='Lista de Empréstimos',
-        pagina_atual=pagina,
-        total_paginas=total_paginas,
-        total_emprestimos=total_emprestimos,
-        emprestimos=emprestimos_dic
-    )
+        cur.execute(sql, params)
+        emprestimos = cur.fetchall()
+
+        total_emprestimos = len(emprestimos)
+        total_paginas = (total_emprestimos + quantidade_por_pagina - 1) // quantidade_por_pagina
+
+        inicio = (pagina - 1) * quantidade_por_pagina
+        fim = inicio + quantidade_por_pagina
+        emprestimos_pagina = emprestimos[inicio:fim]
+
+        if not emprestimos_pagina:
+            return jsonify({'mensagem': 'Nenhum empréstimo encontrado'}), 404
+
+        def formatar_data_br(data):
+            if data is None:
+                return ""
+            if isinstance(data, (datetime, date)):
+                return data.strftime("%d/%m/%Y")
+            if isinstance(data, str):
+                try:
+                    data_obj = datetime.strptime(data, "%Y-%m-%d %H:%M:%S")
+                    return data_obj.strftime("%d/%m/%Y")
+                except ValueError:
+                    try:
+                        data_obj = datetime.strptime(data, "%Y-%m-%d")
+                        return data_obj.strftime("%d/%m/%Y")
+                    except Exception:
+                        return data
+            return str(data)
+
+        # Dentro da rota /emprestimos:
+        emprestimos_formatados = [{
+            'id_emprestimo': e[0],
+            'data_reserva': formatar_data_br(e[1]),
+            'data_emprestimo': formatar_data_br(e[2]),
+            'data_devolucao': formatar_data_br(e[3]),
+            'status': e[4],
+            'id_usuario': e[5],
+            'id_livro': e[6],
+            'nome_usuario': e[7],
+            'titulo_livro': e[8],
+            'autor_livro': e[9]
+        } for e in emprestimos_pagina]
+
+        return jsonify({
+            'mensagem': 'Lista de Empréstimos',
+            'pagina_atual': pagina,
+            'total_paginas': total_paginas,
+            'total_emprestimos': total_emprestimos,
+            'emprestimos': emprestimos_formatados
+        })
+
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
 
 
 @app.route('/devolvidos', methods=['GET'])
